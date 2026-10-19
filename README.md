@@ -1,51 +1,45 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="logo/DuckDB_Logo-horizontal.svg">
-    <source media="(prefers-color-scheme: dark)" srcset="logo/DuckDB_Logo-horizontal-dark-mode.svg">
-    <img alt="DuckDB logo" src="logo/DuckDB_Logo-horizontal.svg" height="100">
-  </picture>
-</div>
-<br>
+# Avoiding Unnecessary Payload Work in Grouped Top-K Aggregation in DuckDB
 
-<p align="center">
-  <a href="https://github.com/duckdb/duckdb/actions"><img src="https://github.com/duckdb/duckdb/actions/workflows/Main.yml/badge.svg?branch=main" alt="Github Actions Badge"></a>
-  <a href="https://discord.gg/tcvwpjfnZx"><img src="https://shields.io/discord/909674491309850675" alt="discord" /></a>
-  <a href="https://github.com/duckdb/duckdb/releases/"><img src="https://img.shields.io/github/v/release/duckdb/duckdb?color=brightgreen&display_name=tag&logo=duckdb&logoColor=white" alt="Latest Release"></a>
-</p>
+> **Independent research source snapshot**, not an official DuckDB project or an upstream performance claim. The baseline branch has the exact source tree of upstream commit `f2b0bad0...`, but this repository intentionally does **not** contain DuckDB’s full Git history. This repository contains two **separate** experimental C++ improvements on the same DuckDB baseline. It does not implement a Hash Join optimization or a universal runtime selector.
 
-## DuckDB
+## Read this repository
 
-DuckDB is a high-performance analytical database system. It is designed to be fast, reliable, portable, and easy to use. DuckDB provides a rich SQL dialect with support far beyond basic SQL. DuckDB supports arbitrary and nested correlated subqueries, window functions, collations, complex types (arrays, structs, maps), and [several extensions designed to make SQL easier to use](https://duckdb.org/docs/current/sql/dialect/friendly_sql.html).
+| Branch | Purpose | Original local commit |
+|---|---|---|
+| [`baseline-f2b0`](../../tree/baseline-f2b0) | Unmodified DuckDB baseline | `f2b0bad0eb3e47e2060f1f07af9d2069eaf77ea1` |
+| [`optimizer-field-pruning`](../../tree/optimizer-field-pruning) | **A:** consumer-driven `arg_max` Top-K `STRUCT` payload pruning | `64bedbc0e7becc41e9914ff57a502c8f7d5aa7a5` |
+| [`execution-admission-aware-encoding`](../../tree/execution-admission-aware-encoding) | **B:** selective, batched Top-K payload sort-key encoding | `435d7a420d4a768e2f701c49a824b2682d57c1be` |
+| `main` | This project guide, portable net patches and selected evidence; engine code is otherwise at the baseline | Publication commit |
 
-DuckDB is available as a [standalone CLI application](https://duckdb.org/docs/current/clients/cli/overview) and has clients for [Python](https://duckdb.org/docs/current/clients/python/overview), [R](https://duckdb.org/docs/current/clients/r), [Java](https://duckdb.org/docs/current/clients/java), [Wasm](https://duckdb.org/docs/current/clients/wasm/overview), etc., with deep integrations with packages such as [pandas](https://duckdb.org/docs/guides/python/sql_on_pandas) and [dplyr](https://duckdb.org/docs/current/clients/r#duckplyr-dplyr-api).
+The published A/B commits reproduce the **exact code trees** of the original local research commits while using a GitHub noreply author address; see [`docs/PUBLISHED_COMMITS.md`](docs/PUBLISHED_COMMITS.md) for both SHA mappings and tree IDs. A and B are **not** one default combined patch. Review each against [`baseline-f2b0`](../../tree/baseline-f2b0); the net patches are also in [`patches/`](patches/). The original DuckDB README is preserved on the [`baseline-f2b0` branch](https://github.com/myhao690/grouped-topk-payload-work/blob/baseline-f2b0/README.md).
 
-For more information on using DuckDB, please refer to the [DuckDB documentation](https://duckdb.org/docs/current/).
+### A — consumer-driven payload pruning
 
-## Installation
+The optimizer recognizes a restricted static `list_transform(topk, lambda x: x.field)` consumer of a built-in `arg_max(STRUCT, score, K)`. It unions field demands across supported consumers and simple projection aliases, rebinds the narrower `STRUCT` payload, aggregate and Lambda types, then lets existing column pruning reduce scan width. Whole-value consumers and unsupported or semantics-sensitive forms fall back. Entry point: `src/optimizer/remove_unused_columns.cpp`; tests: `test/sql/optimizer/c17_argmax_payload_pruning*.test` on the A branch. The Top-1 foundation overlaps prior upstream work in [DuckDB PR #20245](https://github.com/duckdb/duckdb/pull/20245); the Top-K `LIST<STRUCT>`/Lambda and multi-consumer propagation are the scoped research extension here.
 
-If you want to install DuckDB, please see [our installation page](https://duckdb.org/docs/installation/) for instructions.
+### B — admission-aware batched encoding
 
-## Data Import
+For supported full-`STRUCT` Top-K aggregates, the update path estimates whether candidate rejection makes prefiltering worthwhile. It conservatively selects lanes using the heap admission predicate, encodes the selected payloads **once as a batch**, and still calls the original `Insert` in input order. It does not change scan projection, heap representation, comparison semantics, result type or plan shape. Entry points: `extension/core_functions/aggregate/distributive/arg_min_max.cpp` and `src/include/duckdb/function/aggregate/minmax_n_helpers.hpp`; test: `test/sql/aggregate/aggregates/arg_max_selective_struct.test` on the B branch.
 
-For CSV files and Parquet files, data import is as simple as referencing the file in the FROM clause:
+## Selected evidence, not universal speedup claims
 
-```sql
-SELECT * FROM 'myfile.csv';
-SELECT * FROM 'myfile.parquet';
-```
+The measurements below are from fixed Release `-O3 -DNDEBUG` builds on one Apple Silicon machine. Timed queries used warmups, alternating/ABBA sessions, nine measured runs per session, in-process complete result consumption, and no outlier deletion. The published [`evidence/`](evidence/) includes selected SQL, all formal raw timing rows and summaries; absolute local library paths were replaced by variant labels in the public CSVs, with original file hashes documented in [`docs/EVIDENCE_PROVENANCE.md`](docs/EVIDENCE_PROVENANCE.md). Large database files, profiler traces and binaries are **not** committed.
 
-Refer to our [Data Import](https://duckdb.org/docs/current/data/overview) section for more information.
+| Workload | Native baseline | Relevant branch | Median SQL wall time | Observation |
+|---|---:|---:|---|---|
+| SF1 grouped Top-3, one downstream `STRUCT` field | 2339.53 ms | A: 677.83 ms | **3.45×** | Scan projection narrows 16 → 4 columns; four-arm experiment [`20261018_009`](evidence/20261018_009/) |
+| DuckDB-published full-row Top-3 shape over generated TPC-H SF1 | 579.40 ms | B: 231.44 ms | **2.50×** | Full payload required; clean B-only experiment [`20261018_008`](evidence/20261018_008/) |
+| Same full-row shape, SF3 | 1906.52 ms | B: 789.56 ms | **2.41×** | Scaling check; same B-only experiment |
+| SF1 full-row Top-30 | 999.30 ms | B: 695.39 ms | **1.44×** | Larger K still benefits in this case; boundary experiment [`20261018_011`](evidence/20261018_011/) |
 
-## SQL Reference
+The A/B four-arm experiment also found **non-additivity**: for the SF1 one-field query, A alone was 677.83 ms and A+B was 705.98 ms. A zero-rejection B control had overlapping time ranges and no established benefit. These are scoped experimental facts, not claims that every grouped Top-K query or machine improves. See [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) for methods and limits.
 
-The documentation contains a [SQL introduction and reference](https://duckdb.org/docs/current/sql/introduction).
+## Reproduction and review
 
-## Development
+1. Start at the exact baseline SHA above. The branch heads contain the implementation and SQLLogicTests. Alternatively, apply **one** patch from [`patches/`](patches/) to a clean baseline; do not apply both when evaluating either contribution independently.
+2. Read [`docs/CODE_STUDY.md`](docs/CODE_STUDY.md) for the call paths and correctness boundaries.
+3. Read the SQL in [`evidence/`](evidence/) with the corresponding raw CSV and summary before interpreting the timing ratios. These public artifacts are a **selected archival subset**, not a one-command benchmark suite: the original local drivers and large input databases are not distributed here.
 
-For development, DuckDB requires [CMake](https://cmake.org), Python 3 and a `C++17` compliant compiler. In the root directory, run `make` to compile the sources. For development, use `make debug` to build a non-optimized debug version. You should run `make unit` and `make allunit` to verify that your version works properly after making changes. To test performance, you can run `BUILD_BENCHMARK=1 BUILD_TPCH=1 make` and then perform several standard benchmarks from the root directory by executing `./build/release/benchmark/benchmark_runner`. The details of benchmarks are in our [Benchmark Guide](benchmark/README.md).
+## Attribution and license
 
-Please also refer to our [Build Guide](https://duckdb.org/docs/current/dev/building/overview) and [Contribution Guide](CONTRIBUTING.md).
-
-## Support
-
-See the [Support Options](https://ducklabs.com/support/) page and the dedicated [`endoflife.date`](https://endoflife.date/duckdb) page.
+Engine source is derived from [DuckDB](https://github.com/duckdb/duckdb) at `f2b0bad0...` and retains its original [`LICENSE`](LICENSE) and notices. DuckDB is a trademark of the DuckDB Foundation. This personal research repository is not affiliated with or endorsed by the DuckDB Foundation. The name “DuckDB” is used descriptively. See the [upstream project](https://github.com/duckdb/duckdb) and [trademark guidance](https://duckdb.org/trademark_guidelines).
