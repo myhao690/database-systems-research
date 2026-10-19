@@ -134,9 +134,9 @@ private:
 	bool inside_try = false;
 };
 
-// C17 experiment: one static field demand per list_transform consumer. Several
+// Top-K payload pruning: one static field demand per list_transform consumer. Several
 // consumers can be unioned at the aggregate; aliases keep their own bindings.
-struct C17ListFieldDemand {
+struct TopKListFieldDemand {
 	BoundFunctionExpression *transform;
 	idx_t field_index;
 	vector<BoundColumnRefExpression *> aliases;
@@ -164,11 +164,11 @@ private:
 	RemoveUnusedColumns &root;
 	unique_ptr<unordered_map<TableIndex, MaterializedCTEInfo>> root_cte_map;
 	column_binding_map_t<vector<ColumnBinding>> projection_map_replacements;
-	vector<unique_ptr<C17ListFieldDemand>> c17_list_demands;
-	column_binding_map_t<vector<C17ListFieldDemand *>> c17_list_by_binding;
-	column_binding_set_t c17_topk_lineage;
-	bool c17_lineage_built = false;
-	idx_t c17_rewrites = 0;
+	vector<unique_ptr<TopKListFieldDemand>> topk_list_demands;
+	column_binding_map_t<vector<TopKListFieldDemand *>> topk_list_by_binding;
+	column_binding_set_t topk_lineage;
+	bool topk_lineage_built = false;
+	idx_t topk_rewrites = 0;
 	struct PrunedViewColumn {
 		ColumnBinding binding;
 		//! Expression over the previous binding; nullptr for a rename.

@@ -47,23 +47,23 @@
 
 namespace duckdb {
 
-// C17 experimental switch. Kept outside the hot path and OFF unless explicitly requested.
-static bool C17PayloadPruningEnabled() {
+// Experimental switch. Kept outside the hot path and OFF unless explicitly requested.
+static bool TopKPayloadPruningEnabled() {
 	const auto *setting = std::getenv("C17_ARGMAX_PAYLOAD_PRUNING");
 	return setting && setting[0] == '1' && setting[1] == '\0';
 }
 
 template <class FUNCTION>
-static bool C17IsSystemFunction(ClientContext &context, const FUNCTION &function) {
+static bool IsSystemCatalogFunction(ClientContext &context, const FUNCTION &function) {
 	return function.GetCatalogName() == Catalog::GetSystemCatalog(context).GetName() &&
 	       function.GetSchemaName() == Identifier::DefaultSchema();
 }
 
 // A read-only, pre-pruning lineage check prevents LIST<STRUCT> inputs from
 // ordinary scans/functions from ever entering the experimental child-path logic.
-static bool C17EligibleTopK(ClientContext &context, const BoundAggregateExpression &aggregate) {
+static bool IsEligibleTopKPayload(ClientContext &context, const BoundAggregateExpression &aggregate) {
 	if (aggregate.Function().GetName().GetIdentifierName() != "arg_max" ||
-	    !C17IsSystemFunction(context, aggregate.Function()) || aggregate.IsDistinct() || aggregate.GetFilter() ||
+	    !IsSystemCatalogFunction(context, aggregate.Function()) || aggregate.IsDistinct() || aggregate.GetFilter() ||
 	    aggregate.GetOrderBys() || aggregate.StateExportMode() != AggregateStateExportMode::NONE ||
 	    aggregate.GetChildren().size() != 3 ||
 	    aggregate.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION ||
@@ -78,7 +78,7 @@ static bool C17EligibleTopK(ClientContext &context, const BoundAggregateExpressi
 	}
 	auto &pack = aggregate.GetChildren()[0]->Cast<BoundFunctionExpression>();
 	if (pack.Function().GetName().GetIdentifierName() != "struct_pack" ||
-	    !C17IsSystemFunction(context, pack.Function()) || pack.GetReturnType().id() != LogicalTypeId::STRUCT ||
+	    !IsSystemCatalogFunction(context, pack.Function()) || pack.GetReturnType().id() != LogicalTypeId::STRUCT ||
 	    ListType::GetChildType(aggregate.GetReturnType()) != pack.GetReturnType() || pack.GetChildren().size() < 2) {
 		return false;
 	}
@@ -90,16 +90,15 @@ static bool C17EligibleTopK(ClientContext &context, const BoundAggregateExpressi
 	return true;
 }
 
-static void C17CollectTopKLineage(const LogicalOperator &op, ClientContext &context,
-                                  column_binding_set_t &lineage) {
+static void CollectTopKLineage(const LogicalOperator &op, ClientContext &context, column_binding_set_t &lineage) {
 	for (auto &child : op.children) {
-		C17CollectTopKLineage(*child, context, lineage);
+		CollectTopKLineage(*child, context, lineage);
 	}
 	if (op.type == LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
 		auto &aggregate = op.Cast<LogicalAggregate>();
 		for (idx_t i = 0; i < aggregate.expressions.size(); ++i) {
 			if (aggregate.expressions[i]->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-			    C17EligibleTopK(context, aggregate.expressions[i]->Cast<BoundAggregateExpression>())) {
+			    IsEligibleTopKPayload(context, aggregate.expressions[i]->Cast<BoundAggregateExpression>())) {
 				lineage.insert(ColumnBinding(aggregate.aggregate_index, ProjectionIndex(i)));
 			}
 		}
@@ -121,7 +120,8 @@ static void C17CollectTopKLineage(const LogicalOperator &op, ClientContext &cont
 // The flat Top-1 case follows the idea of the unmerged upstream PR #20245.
 // Unlike that PR, rebuild the bound aggregate through FunctionBinder: the bound
 // function also owns logical argument/return types and implementation callbacks.
-static bool C17TryPruneTop1Impl(ClientContext &context, unique_ptr<Expression> &expression, ReferencedColumn &reference) {
+static bool TryPruneTop1PayloadImpl(ClientContext &context, unique_ptr<Expression> &expression,
+                                    ReferencedColumn &reference) {
 	if (reference.child_columns.size() != 1 || reference.struct_extracts.size() != 1) {
 		return false;
 	}
@@ -131,18 +131,18 @@ static bool C17TryPruneTop1Impl(ClientContext &context, unique_ptr<Expression> &
 	}
 	auto &aggregate = expression->Cast<BoundAggregateExpression>();
 	const auto &name = aggregate.Function().GetName().GetIdentifierName();
-	if (name != "arg_max" || !C17IsSystemFunction(context, aggregate.Function()) || aggregate.IsDistinct() || aggregate.GetFilter() ||
-	    aggregate.GetOrderBys() || aggregate.StateExportMode() != AggregateStateExportMode::NONE ||
-	    aggregate.GetChildren().size() != 2 || aggregate.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION ||
+	if (name != "arg_max" || !IsSystemCatalogFunction(context, aggregate.Function()) || aggregate.IsDistinct() ||
+	    aggregate.GetFilter() || aggregate.GetOrderBys() ||
+	    aggregate.StateExportMode() != AggregateStateExportMode::NONE || aggregate.GetChildren().size() != 2 ||
+	    aggregate.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION ||
 	    aggregate.GetChildren()[1]->GetReturnType().InternalType() != PhysicalType::INT64) {
 		return false;
 	}
 	auto &pack = aggregate.GetChildren()[0]->Cast<BoundFunctionExpression>();
 	if (pack.Function().GetName().GetIdentifierName() != "struct_pack" ||
-	    !C17IsSystemFunction(context, pack.Function()) ||
-	    pack.GetReturnType().id() != LogicalTypeId::STRUCT ||
-	    aggregate.GetReturnType() != pack.GetReturnType() ||
-	    path.GetPrimaryIndex() >= pack.GetChildren().size() || pack.GetChildren().size() < 2) {
+	    !IsSystemCatalogFunction(context, pack.Function()) || pack.GetReturnType().id() != LogicalTypeId::STRUCT ||
+	    aggregate.GetReturnType() != pack.GetReturnType() || path.GetPrimaryIndex() >= pack.GetChildren().size() ||
+	    pack.GetChildren().size() < 2) {
 		return false;
 	}
 	for (auto &child : pack.GetChildren()) {
@@ -160,8 +160,7 @@ static bool C17TryPruneTop1Impl(ClientContext &context, unique_ptr<Expression> &
 	}
 	auto &extract_function = extract->Cast<BoundFunctionExpression>();
 	if (extract_function.Function().GetName().GetIdentifierName() != "struct_extract" ||
-	    !C17IsSystemFunction(context, extract_function.Function()) ||
-	    !extract_function.BindInfo()) {
+	    !IsSystemCatalogFunction(context, extract_function.Function()) || !extract_function.BindInfo()) {
 		return false;
 	}
 
@@ -203,9 +202,10 @@ static bool C17TryPruneTop1Impl(ClientContext &context, unique_ptr<Expression> &
 	return true;
 }
 
-static bool C17TryPruneTop1(ClientContext &context, unique_ptr<Expression> &expression, ReferencedColumn &reference) {
+static bool TryPruneTop1Payload(ClientContext &context, unique_ptr<Expression> &expression,
+                                ReferencedColumn &reference) {
 	try {
-		return C17TryPruneTop1Impl(context, expression, reference);
+		return TryPruneTop1PayloadImpl(context, expression, reference);
 	} catch (const BinderException &) {
 		return false;
 	}
@@ -215,7 +215,7 @@ static bool C17TryPruneTop1(ClientContext &context, unique_ptr<Expression> &expr
 // uses a second copy of its body in ListLambdaBindData, so rebinding below is
 // mandatory rather than merely changing the visible BoundLambdaExpression.
 void RemoveUnusedColumns::VisitExpression(unique_ptr<Expression> *expression) {
-	if (!C17PayloadPruningEnabled() || mode != RemoveUnusedColumnsMode::APPLY ||
+	if (!TopKPayloadPruningEnabled() || mode != RemoveUnusedColumnsMode::APPLY ||
 	    (*expression)->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		BaseColumnPruner::VisitExpression(expression);
 		return;
@@ -223,8 +223,8 @@ void RemoveUnusedColumns::VisitExpression(unique_ptr<Expression> *expression) {
 	auto &transform = (*expression)->Cast<BoundFunctionExpression>();
 	auto &children = transform.GetChildrenMutable();
 	if (transform.Function().GetName().GetIdentifierName() != "list_transform" ||
-	    !C17IsSystemFunction(context, transform.Function()) || children.size() != 2 ||
-	    !transform.BindInfo() || children[0]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
+	    !IsSystemCatalogFunction(context, transform.Function()) || children.size() != 2 || !transform.BindInfo() ||
+	    children[0]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
 	    children[1]->GetExpressionClass() != ExpressionClass::BOUND_LAMBDA) {
 		BaseColumnPruner::VisitExpression(expression);
 		return;
@@ -241,35 +241,35 @@ void RemoveUnusedColumns::VisitExpression(unique_ptr<Expression> *expression) {
 	auto &extract = lambda.LambdaExpr()->Cast<BoundFunctionExpression>();
 	idx_t field_index;
 	if (extract.Function().GetName().GetIdentifierName() != "struct_extract" ||
-	    !C17IsSystemFunction(context, extract.Function()) ||
-	    !TryGetStructExtractChildIndex(extract, field_index) || extract.GetChildren().size() != 2 ||
+	    !IsSystemCatalogFunction(context, extract.Function()) || !TryGetStructExtractChildIndex(extract, field_index) ||
+	    extract.GetChildren().size() != 2 ||
 	    extract.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_REF ||
 	    extract.GetChildren()[0]->Cast<BoundReferenceExpression>().Index() != 0 ||
 	    field_index >= StructType::GetChildTypes(ListType::GetChildType(ref.GetReturnType())).size()) {
 		BaseColumnPruner::VisitExpression(expression);
 		return;
 	}
-	if (root.c17_topk_lineage.find(ref.Binding()) == root.c17_topk_lineage.end()) {
+	if (root.topk_lineage.find(ref.Binding()) == root.topk_lineage.end()) {
 		BaseColumnPruner::VisitExpression(expression);
 		return;
 	}
 	AddBinding(ref, ColumnIndex(field_index));
-	auto demand = make_uniq<C17ListFieldDemand>();
+	auto demand = make_uniq<TopKListFieldDemand>();
 	demand->transform = &transform;
 	demand->field_index = field_index;
 	demand->aliases.push_back(&ref);
-	root.c17_list_by_binding[ref.Binding()].push_back(demand.get());
-	root.c17_list_demands.push_back(std::move(demand));
+	root.topk_list_by_binding[ref.Binding()].push_back(demand.get());
+	root.topk_list_demands.push_back(std::move(demand));
 }
 
-static bool C17TryPruneTopKImpl(ClientContext &context, unique_ptr<Expression> &expression, ReferencedColumn &reference,
-	                           const vector<C17ListFieldDemand *> &demands) {
+static bool TryPruneTopKPayloadImpl(ClientContext &context, unique_ptr<Expression> &expression,
+                                    ReferencedColumn &reference, const vector<TopKListFieldDemand *> &demands) {
 	if (reference.child_columns.empty() || !reference.struct_extracts.empty() || demands.empty() ||
 	    expression->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return false;
 	}
 	auto &aggregate = expression->Cast<BoundAggregateExpression>();
-	if (!C17EligibleTopK(context, aggregate)) {
+	if (!IsEligibleTopKPayload(context, aggregate)) {
 		return false;
 	}
 	auto &k = aggregate.GetChildren()[2]->Cast<BoundConstantExpression>().GetValue();
@@ -391,12 +391,12 @@ static bool C17TryPruneTopKImpl(ClientContext &context, unique_ptr<Expression> &
 	return true;
 }
 
-static bool C17TryPruneTopK(ClientContext &context, unique_ptr<Expression> &expression, ReferencedColumn &reference,
-	                           const vector<C17ListFieldDemand *> &demands) {
+static bool TryPruneTopKPayload(ClientContext &context, unique_ptr<Expression> &expression, ReferencedColumn &reference,
+                                const vector<TopKListFieldDemand *> &demands) {
 	// Bind on copies before touching the live plan. Only expected bind failures
 	// fall back; internal errors must remain visible.
 	try {
-		return C17TryPruneTopKImpl(context, expression, reference, demands);
+		return TryPruneTopKPayloadImpl(context, expression, reference, demands);
 	} catch (const BinderException &) {
 		return false;
 	}
@@ -853,10 +853,9 @@ void RemoveUnusedColumns::VisitSecureView(LogicalSecureView &view) {
 }
 
 void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
-	if (this == &root && mode == RemoveUnusedColumnsMode::APPLY && C17PayloadPruningEnabled() &&
-	    !c17_lineage_built) {
-		C17CollectTopKLineage(*op_ref, context, c17_topk_lineage);
-		c17_lineage_built = true;
+	if (this == &root && mode == RemoveUnusedColumnsMode::APPLY && TopKPayloadPruningEnabled() && !topk_lineage_built) {
+		CollectTopKLineage(*op_ref, context, topk_lineage);
+		topk_lineage_built = true;
 	}
 	const bool analyze = mode == RemoveUnusedColumnsMode::ANALYZE;
 	auto &op = *op_ref;
@@ -925,22 +924,22 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
 			remove.VisitOperator(op.children[0]);
 			return;
 		}
-		if (C17PayloadPruningEnabled() && !everything_referenced) {
+		if (TopKPayloadPruningEnabled() && !everything_referenced) {
 			bool changed = false;
 			for (idx_t i = 0; i < aggr.expressions.size(); i++) {
 				auto binding = ColumnBinding(aggr.aggregate_index, ProjectionIndex(i));
 				auto entry = column_references.find(binding);
 				if (entry != column_references.end()) {
-					auto demands = root.c17_list_by_binding.find(binding);
-					if (demands != root.c17_list_by_binding.end()) {
-						changed |= C17TryPruneTopK(context, aggr.expressions[i], entry->second, demands->second);
-					} else if (demands == root.c17_list_by_binding.end()) {
-						changed |= C17TryPruneTop1(context, aggr.expressions[i], entry->second);
+					auto demands = root.topk_list_by_binding.find(binding);
+					if (demands != root.topk_list_by_binding.end()) {
+						changed |= TryPruneTopKPayload(context, aggr.expressions[i], entry->second, demands->second);
+					} else if (demands == root.topk_list_by_binding.end()) {
+						changed |= TryPruneTop1Payload(context, aggr.expressions[i], entry->second);
 					}
 				}
 			}
 			if (changed) {
-				root.c17_rewrites++;
+				root.topk_rewrites++;
 				aggr.ResolveOperatorTypes();
 			}
 		}
@@ -1140,7 +1139,7 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
 		// Keep the original expression identities to recover their old bindings;
 		// a newly synthesized extract has no identity here and is not relayed.
 		unordered_map<const Expression *, idx_t> original_indexes;
-		if (C17PayloadPruningEnabled()) {
+		if (TopKPayloadPruningEnabled()) {
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
 				original_indexes.emplace(proj.expressions[i].get(), i);
 			}
@@ -1163,8 +1162,8 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
 		}
 		// then recurse into the children of this projection
 		RemoveUnusedColumns remove(*this, false);
-		const auto rewrites_before_child = root.c17_rewrites;
-		if (C17PayloadPruningEnabled()) {
+		const auto rewrites_before_child = root.topk_rewrites;
+		if (TopKPayloadPruningEnabled()) {
 			for (idx_t i = 0; i < proj.expressions.size(); i++) {
 				auto &expr = proj.expressions[i];
 				auto original_index = original_indexes.find(expr.get());
@@ -1174,9 +1173,8 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
 				}
 				auto output_binding = ColumnBinding(proj.table_index, ProjectionIndex(original_index->second));
 				auto reference = column_references.find(output_binding);
-				auto demands = root.c17_list_by_binding.find(output_binding);
-				if (reference != column_references.end() &&
-				    demands != root.c17_list_by_binding.end() &&
+				auto demands = root.topk_list_by_binding.find(output_binding);
+				if (reference != column_references.end() && demands != root.topk_list_by_binding.end() &&
 				    !reference->second.child_columns.empty() &&
 				    expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 					auto &alias = expr->Cast<BoundColumnRefExpression>();
@@ -1191,7 +1189,7 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
 						}
 						for (auto *demand : demands->second) {
 							demand->aliases.push_back(&alias);
-							root.c17_list_by_binding[alias.Binding()].push_back(demand);
+							root.topk_list_by_binding[alias.Binding()].push_back(demand);
 						}
 						continue;
 					}
@@ -1202,7 +1200,7 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
 			remove.VisitOperatorExpressions(op);
 		}
 		remove.VisitOperator(op.children[0]);
-		if (root.c17_rewrites != rewrites_before_child) {
+		if (root.topk_rewrites != rewrites_before_child) {
 			proj.ResolveOperatorTypes();
 		}
 		return;
