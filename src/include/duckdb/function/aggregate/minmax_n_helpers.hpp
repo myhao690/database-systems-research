@@ -214,6 +214,13 @@ public:
 		return capacity;
 	}
 
+	// Read-only admission check, also used by Insert. Equal keys do not replace
+	// an existing entry in a full heap.
+	bool WouldAdmit(const K &key) const {
+		D_ASSERT(capacity != 0);
+		return size < capacity || K_COMPARATOR::Operation(key, heap[0].first.value);
+	}
+
 	void Insert(ArenaAllocator &allocator, const K &key, const V &value) {
 		D_ASSERT(capacity != 0); // must be initialized
 
@@ -229,7 +236,7 @@ public:
 		}
 		// If the heap is full, check if the value is greater than the smallest value in the heap
 		// If it is, assign the new value to the slot and re-heapify
-		else if (K_COMPARATOR::Operation(key, heap[0].first.value)) {
+		else if (WouldAdmit(key)) {
 			std::pop_heap(heap, heap + size, Compare);
 			heap[size - 1].first.Assign(allocator, key);
 			heap[size - 1].second.Assign(allocator, value);

@@ -1,0 +1,164 @@
+# name: test/sql/aggregate/aggregates/arg_max_selective_struct.test
+# description: Grouped Top-K STRUCT payload selection preserves full aggregate semantics
+# group: [aggregates]
+
+statement ok
+CREATE TABLE c17_late(g INTEGER, p STRUCT(q INTEGER, tag VARCHAR, nested INTEGER[]), s INTEGER);
+
+statement ok
+INSERT INTO c17_late VALUES
+  (1, struct_pack(q := 1, tag := 'a', nested := [1, 2]), 9),
+  (1, struct_pack(q := 2, tag := 'b', nested := [3]), 9),
+  (1, NULL, 10),
+  (1, struct_pack(q := 3, tag := 'c', nested := []::INTEGER[]), NULL),
+  (1, struct_pack(q := NULL, tag := 'd', nested := [4]), 8),
+  (1, struct_pack(q := 7, tag := 'g', nested := [8]), 7),
+  (2, struct_pack(q := 4, tag := 'e', nested := [5]), 4),
+  (2, struct_pack(q := 5, tag := 'f', nested := [6]), 5),
+  (2, struct_pack(q := 6, tag := 'g', nested := [7]), 6),
+  (2, struct_pack(q := 7, tag := 'h', nested := [9]), 3),
+  (2, struct_pack(q := 8, tag := 'i', nested := [10]), 8);
+
+query III rowsort
+SELECT g, length(arg_max(p, s, 3)),
+       list_sum(list_transform(arg_max(p, s, 3), lambda x: x.q))
+FROM c17_late GROUP BY g;
+----
+1	3	3
+2	3	19
+
+# Both scalar and nested fields of retained STRUCT rows must survive. The
+# rejected score-7/score-3 rows must not appear in the K=3 output.
+query III rowsort
+SELECT g, list_sum(list_transform(arg_max(p, s, 3), lambda x: list_sum(x.nested))),
+       list_sort(list_transform(arg_max(p, s, 3), lambda x: x.tag))
+FROM c17_late GROUP BY g;
+----
+1	10	[a, b, d]
+2	23	[f, g, i]
+
+query III rowsort
+SELECT g, length(arg_max(p, s, 10)),
+       list_sum(list_transform(arg_max(p, s, 10), lambda x: x.q))
+FROM c17_late GROUP BY g;
+----
+1	4	10
+2	5	30
+
+query II
+SELECT length(arg_max(p, s, 1)),
+       list_sum(list_transform(arg_max(p, s, 1), lambda x: x.q))
+FROM c17_late WHERE g = 2;
+----
+1	8
+
+# The heap fills in the first input chunk. Later chunks are wholly rejected
+# until the final row replaces the minimum, testing the batched zero-candidate
+# and post-boundary replacement paths without depending on LIST tie order.
+query II
+WITH t AS (
+  SELECT struct_pack(id := i, tag := CAST(i AS VARCHAR)) AS p,
+         CASE WHEN i = 4999 THEN 20000
+              WHEN i < 3 THEN 10000 - i
+              ELSE i END AS s
+  FROM range(5000) r(i)
+)
+SELECT length(arg_max(p, s, 3)),
+       list_sum(list_transform(arg_max(p, s, 3), lambda x: x.id))
+FROM t;
+----
+3	5000
+
+statement error
+SELECT arg_max(p, s, 0) FROM c17_late;
+----
+Invalid Input Error: Invalid input for arg_min/arg_max: n value must be > 0
+
+# The next queries exceed a vector and exercise a full heap. Equal scores at
+# the threshold are rejected; the final higher score replaces one entry.
+query II
+WITH t AS (
+  SELECT struct_pack(id := i, nested := struct_pack(tag := CAST(i AS VARCHAR), vals := [i, i + 1])) AS p,
+         CASE WHEN i = 0 THEN 10000 WHEN i = 1 THEN 9999 WHEN i = 2 THEN 9998
+              WHEN i = 4999 THEN 10001 ELSE 9998 END::BIGINT AS s
+  FROM range(5000) r(i)
+)
+SELECT length(x), list_sum(list_transform(x, lambda z: z.id))
+FROM (SELECT arg_max(p, s, 3) AS x FROM t);
+----
+3	5000
+
+# Outer NULL payload and NULL scores are ignored; a NULL child is retained.
+query III
+WITH t AS (
+  SELECT CASE WHEN i >= 3 AND i % 2 = 0 THEN NULL
+              ELSE struct_pack(q := CASE WHEN i = 0 THEN NULL ELSE i END,
+                               nested := struct_pack(v := [i, NULL])) END AS p,
+         CASE WHEN i = 0 THEN 10000 WHEN i = 1 THEN 9999 WHEN i = 2 THEN 9998
+              WHEN i = 4999 THEN NULL ELSE i END::BIGINT AS s
+  FROM range(5000) r(i)
+)
+SELECT length(x), list_sum(list_transform(x, lambda z: z.q)),
+       list_sum(list_transform(x, lambda z: list_count(z.nested.v)))
+FROM (SELECT arg_max(p, s, 3) AS x FROM t);
+----
+3	3	3
+
+# Dynamic K is constant within each group, avoiding order-dependent semantics.
+query II
+WITH t AS (
+  SELECT i % 4 AS g, struct_pack(id := i, nested := struct_pack(v := [i])) AS p,
+         -(i::BIGINT) AS s, (i % 4) + 1 AS k FROM range(20000) r(i)
+), a AS (SELECT g, arg_max(p, s, k) AS x FROM t GROUP BY g)
+SELECT SUM(length(x)), SUM(list_sum(list_transform(x, lambda z: z.id))) FROM a;
+----
+10	60
+
+statement ok
+SET threads=4;
+
+statement ok
+PRAGMA verify_parallelism;
+
+# Unique scores make the expected result independent of parallel input order.
+query II
+WITH t AS (
+  SELECT i % 64 AS g, struct_pack(id := i, nested := struct_pack(v := [i, NULL])) AS p,
+         -(i::BIGINT) AS s FROM range(1000000) r(i)
+), a AS (SELECT g, arg_max(p, s, 3) AS x FROM t GROUP BY g)
+SELECT SUM(length(x)), SUM(list_sum(list_transform(x, lambda z: z.id))) FROM a;
+----
+192	18336
+
+statement ok
+PRAGMA disable_verify_parallelism;
+
+statement ok
+SET threads=1;
+
+# Unsupported score/payload/comparator/null modes stay on the existing path.
+query I
+WITH t AS (SELECT struct_pack(id := i) AS p, i::DOUBLE AS s FROM range(5000) r(i))
+SELECT list_sum(list_transform(arg_max(p, s, 3), lambda z: z.id)) FROM t;
+----
+14994
+
+query I
+WITH t AS (SELECT [i, i + 1] AS p, i::BIGINT AS s FROM range(5000) r(i))
+SELECT list_sum(list_transform(arg_max(p, s, 3), lambda z: z[1])) FROM t;
+----
+14994
+
+query I
+WITH t AS (SELECT struct_pack(id := i) AS p, i::BIGINT AS s FROM range(5000) r(i))
+SELECT list_sum(list_transform(arg_min(p, s, 3), lambda z: z.id)) FROM t;
+----
+3
+
+query I
+WITH t AS (SELECT struct_pack(id := i) AS p,
+                 CASE WHEN i = 4999 THEN NULL ELSE i::BIGINT END AS s
+          FROM range(5000) r(i))
+SELECT list_sum(list_transform(arg_max_nulls_last(p, s, 3), lambda z: z.id)) FROM t;
+----
+14991

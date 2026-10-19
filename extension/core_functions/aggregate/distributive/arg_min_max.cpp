@@ -11,6 +11,8 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression_binder.hpp"
 
+#include <type_traits>
+
 namespace duckdb {
 
 namespace {
@@ -659,6 +661,7 @@ class ArgMinMaxNState {
 public:
 	using VAL_TYPE = A;
 	using ARG_TYPE = B;
+	using COMPARATOR_TYPE = COMPARATOR;
 
 	using V = typename VAL_TYPE::TYPE;
 	using K = typename ARG_TYPE::TYPE;
@@ -675,6 +678,26 @@ public:
 //------------------------------------------------------------------------------
 // Operation
 //------------------------------------------------------------------------------
+template <class STATE>
+void InitializeArgMinMaxNState(STATE &state, UnifiedVectorFormat &n_format, idx_t row,
+                               AggregateInputData &aggr_input) {
+	if (state.is_initialized) {
+		return;
+	}
+	const auto nidx = n_format.sel->get_index(row);
+	if (!n_format.validity.RowIsValid(nidx)) {
+		throw InvalidInputException("Invalid input for arg_min/arg_max: n value cannot be NULL");
+	}
+	const auto nval = UnifiedVectorFormat::GetData<int64_t>(n_format)[nidx];
+	if (nval <= 0) {
+		throw InvalidInputException("Invalid input for arg_min/arg_max: n value must be > 0");
+	}
+	if (nval >= MIN_MAX_N_MAX_VALUE) {
+		throw InvalidInputException("Invalid input for arg_min/arg_max: n value must be < %d", MIN_MAX_N_MAX_VALUE);
+	}
+	state.Initialize(aggr_input.allocator, UnsafeNumericCast<idx_t>(nval));
+}
+
 template <class STATE>
 void ArgMinMaxNUpdate(Vector inputs[], AggregateInputData &aggr_input, idx_t input_count, Vector &state_vector,
                       idx_t count) {
@@ -693,14 +716,81 @@ void ArgMinMaxNUpdate(Vector inputs[], AggregateInputData &aggr_input, idx_t inp
 	auto val_extra_state = STATE::VAL_TYPE::CreateExtraState();
 	auto arg_extra_state = STATE::ARG_TYPE::CreateExtraState();
 
-	STATE::VAL_TYPE::PrepareData(val_vector, val_extra_state, val_format, bind_data.nulls_last);
+	bool may_select_payload = false;
+	if constexpr (std::is_same_v<typename STATE::VAL_TYPE, MinMaxFallbackValue> &&
+	              (std::is_same_v<typename STATE::ARG_TYPE, MinMaxFixedValue<int32_t>> ||
+	               std::is_same_v<typename STATE::ARG_TYPE, MinMaxFixedValue<int64_t>>) &&
+	              std::is_same_v<typename STATE::COMPARATOR_TYPE, GreaterThan>) {
+		may_select_payload = count >= 128 && val_vector.GetType().id() == LogicalTypeId::STRUCT &&
+		                     bind_data.null_handling == ArgMinMaxNullHandling::IGNORE_ANY_NULL;
+	}
+	if (!may_select_payload) {
+		// Keep the original preparation order for every unaffected aggregate.
+		STATE::VAL_TYPE::PrepareData(val_vector, val_extra_state, val_format, bind_data.nulls_last);
+	}
 	STATE::ARG_TYPE::PrepareData(arg_vector, arg_extra_state, arg_format, bind_data.nulls_last);
 
 	n_vector.ToUnifiedFormat(n_format);
 	state_vector.ToUnifiedFormat(state_format);
 
 	auto states = UnifiedVectorFormat::GetData<STATE *>(state_format);
-
+	bool selective_payload = false;
+	if (may_select_payload) {
+		// Sampling needs validity only; encode the payload after choosing a path.
+		val_vector.ToUnifiedFormat(val_format);
+		idx_t rejected_samples = 0;
+		for (idx_t sample = 0; sample < 32; sample++) {
+			const auto i = sample * count / 32;
+			const auto arg_idx = arg_format.sel->get_index(i);
+			const auto val_idx = val_format.sel->get_index(i);
+			if (!arg_format.validity.RowIsValid(arg_idx) || !val_format.validity.RowIsValid(val_idx)) {
+				continue;
+			}
+			auto &state = *states[state_format.sel->get_index(i)];
+			if (state.is_initialized &&
+			    !state.heap.WouldAdmit(STATE::ARG_TYPE::Create(arg_format, arg_idx))) {
+				rejected_samples++;
+			}
+		}
+		selective_payload = rejected_samples >= 8;
+		if (!selective_payload) {
+			STATE::VAL_TYPE::PrepareData(val_vector, val_extra_state, val_format, bind_data.nulls_last);
+		}
+	}
+	if (selective_payload) {
+		SelectionVector candidates(count);
+		idx_t candidate_count = 0;
+		for (idx_t i = 0; i < count; i++) {
+			const auto arg_idx = arg_format.sel->get_index(i);
+			const auto val_idx = val_format.sel->get_index(i);
+			if (!arg_format.validity.RowIsValid(arg_idx) || !val_format.validity.RowIsValid(val_idx)) {
+				continue;
+			}
+			auto &state = *states[state_format.sel->get_index(i)];
+			// For arg_max, a full heap's minimum score cannot decrease while
+			// this chunk is processed. Its current threshold is a safe filter.
+			const auto arg_val = STATE::ARG_TYPE::Create(arg_format, arg_idx);
+			if (state.is_initialized && !state.heap.WouldAdmit(arg_val)) {
+				continue;
+			}
+			candidates.set_index(candidate_count++, i);
+		}
+		if (candidate_count == 0) {
+			return;
+		}
+		Vector candidate_values(val_vector, candidates, candidate_count);
+		UnifiedVectorFormat candidate_format;
+		STATE::VAL_TYPE::PrepareData(candidate_values, val_extra_state, candidate_format, bind_data.nulls_last);
+		for (idx_t j = 0; j < candidate_count; j++) {
+			const auto i = candidates.get_index(j);
+			auto &state = *states[state_format.sel->get_index(i)];
+			InitializeArgMinMaxNState(state, n_format, i, aggr_input);
+			const auto arg_val = STATE::ARG_TYPE::Create(arg_format, arg_format.sel->get_index(i));
+			const auto val_val = STATE::VAL_TYPE::Create(candidate_format, candidate_format.sel->get_index(j));
+			state.heap.Insert(aggr_input.allocator, arg_val, val_val);
+		}
+		return;
+	}
 	for (idx_t i = 0; i < count; i++) {
 		const auto arg_idx = arg_format.sel->get_index(i);
 		const auto val_idx = val_format.sel->get_index(i);
@@ -718,26 +808,11 @@ void ArgMinMaxNUpdate(Vector inputs[], AggregateInputData &aggr_input, idx_t inp
 		auto &state = *states[state_idx];
 
 		// Initialize the heap if necessary and add the input to the heap
-		if (!state.is_initialized) {
-			const auto nidx = n_format.sel->get_index(i);
-			if (!n_format.validity.RowIsValid(nidx)) {
-				throw InvalidInputException("Invalid input for arg_min/arg_max: n value cannot be NULL");
-			}
-			const auto nval = UnifiedVectorFormat::GetData<int64_t>(n_format)[nidx];
-			if (nval <= 0) {
-				throw InvalidInputException("Invalid input for arg_min/arg_max: n value must be > 0");
-			}
-			if (nval >= MIN_MAX_N_MAX_VALUE) {
-				throw InvalidInputException("Invalid input for arg_min/arg_max: n value must be < %d",
-				                            MIN_MAX_N_MAX_VALUE);
-			}
-			state.Initialize(aggr_input.allocator, UnsafeNumericCast<idx_t>(nval));
-		}
+		InitializeArgMinMaxNState(state, n_format, i, aggr_input);
 
 		// Now add the input to the heap
 		auto arg_val = STATE::ARG_TYPE::Create(arg_format, arg_idx);
 		auto val_val = STATE::VAL_TYPE::Create(val_format, val_idx);
-
 		state.heap.Insert(aggr_input.allocator, arg_val, val_val);
 	}
 }
