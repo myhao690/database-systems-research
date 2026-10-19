@@ -12,6 +12,6 @@ All timings include SQL parse/plan, execution and complete in-process Fetch, but
 
 - A's 16→4 scan columns is a plan observation; its end-to-end gain also includes less `STRUCT` construction and aggregate work. Do not assign the entire gain to scan alone.
 - B's saved payload encoding is supported by the unchanged plan and diagnostic/profile evidence; CPU sampling is not precise wall time, and an `ldr` instruction is not a cache-miss measurement.
-- The CSV `loaded_lib_role` field is a public redaction of local absolute library paths. All timing, row-count and result-fingerprint values are unchanged; CSV line endings were normalized to LF. The original local files and profiler traces remain archived in the C17 workspace, not on GitHub.
+- The CSV `loaded_lib_role` field is a public redaction of local absolute library paths. All timing, row-count and result-fingerprint values are unchanged; CSV line endings were normalized to LF. The original local files and profiler traces remain archived in the local research workspace, not on GitHub.
 - Generated TPC-H and one adapted public-data query demonstrate opportunity but not prevalence among production OLAP queries. Results are from one Apple Silicon machine. There is no cross-architecture validation or formal full-SQL correctness proof.
 - A's Top-1 foundation has prior art in DuckDB PR #20245. B's scope is Top-K fallback `STRUCT` payload preparation on the pinned baseline, not a claim that all upstream versions lack any related optimization.

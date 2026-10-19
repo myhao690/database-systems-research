@@ -17,9 +17,9 @@ The initial published A/B commits reproduce the **exact code trees** of the orig
 
 The optimizer recognizes a restricted static `list_transform(topk, lambda x: x.field)` consumer of a built-in `arg_max(STRUCT, score, K)`. It unions field demands across supported consumers and simple projection aliases, rebinds the narrower `STRUCT` payload, aggregate and Lambda types, then lets existing column pruning reduce scan width. Whole-value consumers and unsupported or semantics-sensitive forms fall back. Entry point: `src/optimizer/remove_unused_columns.cpp`; tests: `test/sql/optimizer/arg_max_struct_payload_pruning*.test` on the A branch. The Top-1 foundation overlaps prior upstream work in [DuckDB PR #20245](https://github.com/duckdb/duckdb/pull/20245); the Top-K `LIST<STRUCT>`/Lambda and multi-consumer propagation are the scoped research extension here.
 
-This experimental A optimization is OFF by default. Set `DUCKDB_TOPK_PAYLOAD_PRUNING=1` before starting DuckDB to enable it. The old `C17_ARGMAX_PAYLOAD_PRUNING=1` remains a compatibility alias for archived scripts; when both variables are present, `DUCKDB_TOPK_PAYLOAD_PRUNING` takes precedence.
+This experimental A optimization is OFF by default. Set `DUCKDB_TOPK_PAYLOAD_PRUNING=1` before starting DuckDB to enable it. No older project-specific switch is accepted by the current branch head.
 
-The naming-only updates and their validation are recorded in [`docs/NAMING_CLEANUP.md`](docs/NAMING_CLEANUP.md).
+The current switch, branch boundaries and validation are recorded in [`docs/CURRENT_INTERFACE.md`](docs/CURRENT_INTERFACE.md).
 
 ### B — admission-aware batched encoding
 

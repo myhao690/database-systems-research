@@ -46,7 +46,7 @@ index 82a6d54d..31642044 100644
  		ColumnBinding binding;
  		//! Expression over the previous binding; nullptr for a rename.
 diff --git a/src/optimizer/remove_unused_columns.cpp b/src/optimizer/remove_unused_columns.cpp
-index 5e2bb6dd..b1261f37 100644
+index 5e2bb6dd..88bea036 100644
 --- a/src/optimizer/remove_unused_columns.cpp
 +++ b/src/optimizer/remove_unused_columns.cpp
 @@ -1,5 +1,6 @@
@@ -66,7 +66,7 @@ index 5e2bb6dd..b1261f37 100644
  #include "duckdb/planner/filter/expression_filter.hpp"
  #include "duckdb/planner/operator/logical_aggregate.hpp"
  #include "duckdb/planner/operator/logical_column_data_get.hpp"
-@@ -38,10 +42,370 @@
+@@ -38,10 +42,366 @@
  #include "duckdb/planner/logical_operator_repeatability.hpp"
  #include "duckdb/planner/subquery/column_binding_layout.hpp"
  #include "duckdb/planner/expression_iterator.hpp"
@@ -78,10 +78,6 @@ index 5e2bb6dd..b1261f37 100644
 +// Experimental switch. Kept outside the hot path and OFF unless explicitly requested.
 +static bool TopKPayloadPruningEnabled() {
 +	const auto *setting = std::getenv("DUCKDB_TOPK_PAYLOAD_PRUNING");
-+	if (!setting) {
-+		// Preserve compatibility with archived benchmark drivers.
-+		setting = std::getenv("C17_ARGMAX_PAYLOAD_PRUNING");
-+	}
 +	return setting && setting[0] == '1' && setting[1] == '\0';
 +}
 +
@@ -437,7 +433,7 @@ index 5e2bb6dd..b1261f37 100644
  static void GatherCTEScans(const TableIndex cte_index, const LogicalOperator &op,
                             unordered_set<TableIndex> &expected_readers) {
  	if (op.type == LogicalOperatorType::LOGICAL_CTE_REF) {
-@@ -493,6 +857,10 @@ void RemoveUnusedColumns::VisitSecureView(LogicalSecureView &view) {
+@@ -493,6 +853,10 @@ void RemoveUnusedColumns::VisitSecureView(LogicalSecureView &view) {
  }
  
  void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
@@ -448,7 +444,7 @@ index 5e2bb6dd..b1261f37 100644
  	const bool analyze = mode == RemoveUnusedColumnsMode::ANALYZE;
  	auto &op = *op_ref;
  	switch (op.type) {
-@@ -560,6 +928,25 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
+@@ -560,6 +924,25 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
  			remove.VisitOperator(op.children[0]);
  			return;
  		}
@@ -474,7 +470,7 @@ index 5e2bb6dd..b1261f37 100644
  		if (!everything_referenced) {
  			// FIXME: groups that are not referenced need to stay -> but they don't need to be scanned and output!
  			ClearUnusedExpressions(aggr.expressions, aggr.aggregate_index);
-@@ -752,6 +1139,15 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
+@@ -752,6 +1135,15 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
  			remove.VisitOperator(op.children[0]);
  			return;
  		}
@@ -490,7 +486,7 @@ index 5e2bb6dd..b1261f37 100644
  		if (!everything_referenced) {
  			CheckPushdownExtract(op);
  			auto old_expression_count = proj.expressions.size();
-@@ -770,8 +1166,47 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
+@@ -770,8 +1162,47 @@ void RemoveUnusedColumns::VisitOperator(unique_ptr<LogicalOperator> &op_ref) {
  		}
  		// then recurse into the children of this projection
  		RemoveUnusedColumns remove(*this, false);

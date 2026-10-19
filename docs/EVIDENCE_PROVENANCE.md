@@ -1,6 +1,6 @@
 # Published evidence provenance
 
-The public raw timing CSVs are copies of formal C17 run tables with **only** `loaded_lib` changed: its local absolute file path was removed and the column was renamed `loaded_lib_role`, whose value is the already recorded `mode`. Timing, query identity, session/run, row count and result fingerprints were not changed. This redaction avoids publishing a personal filesystem path. Summary and SQL field values were copied without transformation; published CSV line endings were normalized to LF. No experiment was rerun for this publication.
+The public raw timing CSVs are copies of formal local run tables with **only** `loaded_lib` changed: its local absolute file path was removed and the column was renamed `loaded_lib_role`, whose value is the already recorded `mode`. Timing, query identity, session/run, row count and result fingerprints were not changed. This redaction avoids publishing a personal filesystem path. Summary and SQL field values were copied without transformation; published CSV line endings were normalized to LF. No experiment was rerun for this publication.
 
 Source SHA-256 hashes before redaction/copy:
 
@@ -13,4 +13,4 @@ Source SHA-256 hashes before redaction/copy:
 | `20261018_011` | `raw_runs.csv` | `c42a694ddedba870fd3af3852e8ae4383aacdcecc44475b76107581062937067` |
 | `20261018_011` | `summary.csv` | `6c2f1d6e6a6fe375c9c9f909d93482c9a0ce180397d0c999d45d85bf56f57da5` |
 
-The original full experiment directories are retained in the local C17 `results/aggregate_pruning/experiments/` archive. Public CSVs are a selected evidence subset; large database inputs, binary drivers, full profiler traces and machine-local logs are not included.
+The original full experiment directories are retained in the local `results/aggregate_pruning/experiments/` archive. Public CSVs are a selected evidence subset; large database inputs, binary drivers, full profiler traces and machine-local logs are not included.
