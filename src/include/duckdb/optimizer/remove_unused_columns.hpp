@@ -21,6 +21,7 @@
 namespace duckdb {
 class Binder;
 class BoundColumnRefExpression;
+class BoundFunctionExpression;
 class ClientContext;
 class LogicalColumnDataGet;
 class LogicalRecursiveCTE;
@@ -133,6 +134,14 @@ private:
 	bool inside_try = false;
 };
 
+// C17 experiment: one static field demand per list_transform consumer. Several
+// consumers can be unioned at the aggregate; aliases keep their own bindings.
+struct C17ListFieldDemand {
+	BoundFunctionExpression *transform;
+	idx_t field_index;
+	vector<BoundColumnRefExpression *> aliases;
+};
+
 //! The RemoveUnusedColumns optimizer traverses the logical operator tree and removes any columns that are not required
 class RemoveUnusedColumns : public BaseColumnPruner {
 public:
@@ -140,6 +149,7 @@ public:
 	RemoveUnusedColumns(RemoveUnusedColumns &parent, bool is_root);
 
 	void VisitOperator(unique_ptr<LogicalOperator> &op) override;
+	void VisitExpression(unique_ptr<Expression> *expression) override;
 
 private:
 	Optimizer &optimizer;
@@ -154,6 +164,11 @@ private:
 	RemoveUnusedColumns &root;
 	unique_ptr<unordered_map<TableIndex, MaterializedCTEInfo>> root_cte_map;
 	column_binding_map_t<vector<ColumnBinding>> projection_map_replacements;
+	vector<unique_ptr<C17ListFieldDemand>> c17_list_demands;
+	column_binding_map_t<vector<C17ListFieldDemand *>> c17_list_by_binding;
+	column_binding_set_t c17_topk_lineage;
+	bool c17_lineage_built = false;
+	idx_t c17_rewrites = 0;
 	struct PrunedViewColumn {
 		ColumnBinding binding;
 		//! Expression over the previous binding; nullptr for a rename.

@@ -1,0 +1,174 @@
+# name: test/sql/optimizer/c17_argmax_payload_pruning.test
+# description: C17 experimental arg_max STRUCT payload pruning (run with C17_ARGMAX_PAYLOAD_PRUNING=1)
+# group: [optimizer]
+
+statement ok
+CREATE TABLE c17_prune(q INTEGER, extra VARCHAR, score BIGINT, grp INTEGER);
+
+statement ok
+INSERT INTO c17_prune VALUES (NULL, 'a', 20, 1), (7, 'b', 10, 1), (4, 'c', 9, 2), (5, 'd', NULL, 2);
+
+# A non-null STRUCT with a NULL field must remain an eligible payload.
+query I
+SELECT (arg_max(struct_pack(q := q, extra := extra), score)).q FROM c17_prune WHERE grp = 1;
+----
+NULL
+
+# The selected field moves from index 1 to index 0, without becoming scalar.
+query I
+SELECT (arg_max(struct_pack(extra := extra, q := q), score)).q FROM c17_prune WHERE grp = 2;
+----
+4
+
+# Two distinct fields of one aggregate result require the whole payload: fallback.
+query II
+SELECT top.q, top.extra FROM (SELECT arg_max(struct_pack(q := q, extra := extra), score) AS top FROM c17_prune WHERE grp = 2);
+----
+4	c
+
+# DISTINCT changes payload equivalence; the optimizer must not prune it.
+query I
+SELECT (arg_max(DISTINCT struct_pack(q := q, extra := extra), score)).q FROM c17_prune WHERE grp = 2;
+----
+4
+
+# A stored nullable STRUCT must not be repacked, or NULL eligibility changes.
+query I
+WITH t(s, score) AS (
+  VALUES (NULL::STRUCT(q INTEGER, extra VARCHAR), 20::BIGINT), (struct_pack(q := 7, extra := 'b'), 10::BIGINT)
+)
+SELECT (arg_max(s, score)).q FROM t;
+----
+7
+
+# Top-K: the retained INTEGER field moves past a discarded VARCHAR field.
+# The NULL child remains a valid STRUCT payload and occupies one of the two slots.
+query II
+SELECT length(top), list_sum(list_transform(top, lambda x: x.q))
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+2	7
+
+# A row with NULL score is not a candidate, even for Top-K.
+query I
+SELECT list_sum(list_transform(top, lambda x: x.q))
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) AS top
+      FROM c17_prune WHERE grp = 2);
+----
+4
+
+# Two list_transform consumers need different fields: conservative fallback.
+query II
+SELECT list_sum(list_transform(top, lambda x: x.q)),
+       list_sum(list_transform(top, lambda x: length(x.extra)))
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+7	2
+
+# A whole-LIST consumer defeats the narrower field demand.
+query II
+SELECT list_sum(list_transform(top, lambda x: x.q)), length(top)
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+7	2
+
+# DISTINCT payloads may be unequal only in a discarded field. Do not rewrite.
+query I
+WITH t(q, extra, score) AS (VALUES (1, 'a', 10::BIGINT), (1, 'b', 10::BIGINT), (2, 'c', 9::BIGINT))
+SELECT list_sort(list_transform(top, lambda x: x.q))
+FROM (SELECT arg_max(DISTINCT struct_pack(q := q, extra := extra), score, 3) AS top FROM t);
+----
+[1, 1, 2]
+
+# Equal scores retain both payloads; order is normalized because SQL does not promise tie order.
+query I
+WITH t(q, extra, score) AS (VALUES (1, 'a', 10::BIGINT), (2, 'b', 10::BIGINT))
+SELECT list_sort(list_transform(top, lambda x: x.q))
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) AS top FROM t);
+----
+[1, 2]
+
+# A static extraction from an ordinary LIST column is not an arg_max rewrite.
+query I
+WITH t(xs) AS (VALUES ([struct_pack(q := 2, extra := 'a'), struct_pack(q := 3, extra := 'b')]))
+SELECT list_sum(list_transform(xs, lambda x: x.q)) FROM t;
+----
+5
+
+statement ok
+CREATE TABLE c17_list_source AS SELECT [struct_pack(extra := 'a', q := 2), struct_pack(extra := 'b', q := 3)] AS xs;
+
+statement ok
+EXPLAIN SELECT list_sum(list_transform(xs, lambda x: x.q)) FROM c17_list_source;
+
+statement ok
+EXPLAIN ANALYZE SELECT list_sum(list_transform(xs, lambda x: x.q)) FROM c17_list_source;
+
+query I
+SELECT list_sum(list_transform(xs, lambda x: x.q)) FROM c17_list_source;
+----
+5
+
+# FILTER must remain on the original aggregate binding.
+query I
+SELECT list_sum(list_transform(top, lambda x: x.q))
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) FILTER (WHERE q IS NOT NULL) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+7
+
+# A complex removed expression may throw. The rewrite must not suppress it.
+statement error
+SELECT list_sum(list_transform(top, lambda x: x.q))
+FROM (SELECT arg_max(struct_pack(q := q, extra := CAST(extra AS INTEGER)), score, 2) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+Could not convert string 'a' to INT32
+
+# VARCHAR selection changes the Lambda result type, not the LIST cardinality.
+query T
+SELECT list_extract(list_transform(top, lambda x: x.extra), 1)
+FROM (SELECT arg_max(struct_pack(q := q, extra := extra), score, 2) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+a
+
+# A DECIMAL field remains DECIMAL after field-index remapping.
+query T
+WITH t(q, extra, score) AS (VALUES (12.34::DECIMAL(12,2), 'a', 10::BIGINT),
+                                 (4.56::DECIMAL(12,2), 'b', 9::BIGINT))
+SELECT typeof(list_extract(list_transform(top, lambda x: x.q), 1))
+FROM (SELECT arg_max(struct_pack(extra := extra, q := q), score, 2) AS top FROM t);
+----
+DECIMAL(12,2)
+
+# Nested x.nested.q is outside the direct-field rule and must stay valid.
+query I
+SELECT list_sum(list_transform(top, lambda x: x.nested.q))
+FROM (SELECT arg_max(struct_pack(extra := extra, nested := struct_pack(q := q)), score, 2) AS top
+      FROM c17_prune WHERE grp = 1);
+----
+7
+
+# Parallel aggregate/scan with unique score per row: no tie-order dependence.
+statement ok
+CREATE TABLE c17_parallel AS
+SELECT (i % 1000)::INTEGER AS grp, i::BIGINT AS score,
+       ('v' || i)::VARCHAR AS label, (i % 13)::INTEGER AS q
+FROM range(100000) AS t(i);
+
+statement ok
+SET threads=4;
+
+query I
+SELECT SUM(list_sum(list_transform(top, lambda x: x.q)))
+FROM (SELECT arg_max(struct_pack(label := label, q := q), score, 3) AS top
+      FROM c17_parallel GROUP BY grp);
+----
+18003
+
+statement ok
+SET threads=1;
