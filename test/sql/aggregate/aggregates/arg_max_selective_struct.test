@@ -3,10 +3,10 @@
 # group: [aggregates]
 
 statement ok
-CREATE TABLE c17_late(g INTEGER, p STRUCT(q INTEGER, tag VARCHAR, nested INTEGER[]), s INTEGER);
+CREATE TABLE topk_selective_payload(g INTEGER, p STRUCT(q INTEGER, tag VARCHAR, nested INTEGER[]), s INTEGER);
 
 statement ok
-INSERT INTO c17_late VALUES
+INSERT INTO topk_selective_payload VALUES
   (1, struct_pack(q := 1, tag := 'a', nested := [1, 2]), 9),
   (1, struct_pack(q := 2, tag := 'b', nested := [3]), 9),
   (1, NULL, 10),
@@ -22,7 +22,7 @@ INSERT INTO c17_late VALUES
 query III rowsort
 SELECT g, length(arg_max(p, s, 3)),
        list_sum(list_transform(arg_max(p, s, 3), lambda x: x.q))
-FROM c17_late GROUP BY g;
+FROM topk_selective_payload GROUP BY g;
 ----
 1	3	3
 2	3	19
@@ -32,7 +32,7 @@ FROM c17_late GROUP BY g;
 query III rowsort
 SELECT g, list_sum(list_transform(arg_max(p, s, 3), lambda x: list_sum(x.nested))),
        list_sort(list_transform(arg_max(p, s, 3), lambda x: x.tag))
-FROM c17_late GROUP BY g;
+FROM topk_selective_payload GROUP BY g;
 ----
 1	10	[a, b, d]
 2	23	[f, g, i]
@@ -40,7 +40,7 @@ FROM c17_late GROUP BY g;
 query III rowsort
 SELECT g, length(arg_max(p, s, 10)),
        list_sum(list_transform(arg_max(p, s, 10), lambda x: x.q))
-FROM c17_late GROUP BY g;
+FROM topk_selective_payload GROUP BY g;
 ----
 1	4	10
 2	5	30
@@ -48,7 +48,7 @@ FROM c17_late GROUP BY g;
 query II
 SELECT length(arg_max(p, s, 1)),
        list_sum(list_transform(arg_max(p, s, 1), lambda x: x.q))
-FROM c17_late WHERE g = 2;
+FROM topk_selective_payload WHERE g = 2;
 ----
 1	8
 
@@ -70,7 +70,7 @@ FROM t;
 3	5000
 
 statement error
-SELECT arg_max(p, s, 0) FROM c17_late;
+SELECT arg_max(p, s, 0) FROM topk_selective_payload;
 ----
 Invalid Input Error: Invalid input for arg_min/arg_max: n value must be > 0
 
