@@ -49,7 +49,11 @@ namespace duckdb {
 
 // Experimental switch. Kept outside the hot path and OFF unless explicitly requested.
 static bool TopKPayloadPruningEnabled() {
-	const auto *setting = std::getenv("C17_ARGMAX_PAYLOAD_PRUNING");
+	const auto *setting = std::getenv("DUCKDB_TOPK_PAYLOAD_PRUNING");
+	if (!setting) {
+		// Preserve compatibility with archived benchmark drivers.
+		setting = std::getenv("C17_ARGMAX_PAYLOAD_PRUNING");
+	}
 	return setting && setting[0] == '1' && setting[1] == '\0';
 }
 

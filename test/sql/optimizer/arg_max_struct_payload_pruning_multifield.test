@@ -1,12 +1,12 @@
-# name: test/sql/optimizer/c17_argmax_payload_pruning_multifield.test
-# description: C17.1 Top-K static multi-consumer field union, with OFF/ON correctness
+# name: test/sql/optimizer/arg_max_struct_payload_pruning_multifield.test
+# description: Top-K static multi-consumer field union, with OFF/ON correctness
 # group: [optimizer]
 
 statement ok
-CREATE TABLE c17_mf(q INTEGER, extra VARCHAR, pad BIGINT, score BIGINT, grp INTEGER);
+CREATE TABLE topk_multifield(q INTEGER, extra VARCHAR, pad BIGINT, score BIGINT, grp INTEGER);
 
 statement ok
-INSERT INTO c17_mf VALUES
+INSERT INTO topk_multifield VALUES
   (NULL, 'a', 101, 20, 1), (7, 'bb', 102, 10, 1), (4, 'ccc', 103, 9, 1),
   (5, 'dddd', 104, NULL, 1), (2, NULL, 105, 10, 2), (3, 'z', 106, 9, 2);
 
@@ -15,7 +15,7 @@ query IT
 SELECT list_sum(list_transform(top, lambda x: x.q)),
        array_to_string(list_transform(top, lambda x: x.extra), ',')
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 11	a,bb,ccc
 
@@ -24,7 +24,7 @@ query II
 SELECT list_sum(list_transform(top, lambda x: x.q)),
        list_sum(list_transform(top, lambda x: x.q))
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 11	11
 
@@ -33,7 +33,7 @@ query TI
 SELECT array_to_string(list_transform(top, lambda x: x.extra), ','),
        list_sum(list_transform(top, lambda x: x.q))
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 a,bb,ccc	11
 
@@ -43,7 +43,7 @@ query IIT
 SELECT grp, list_sum(list_transform(top, lambda x: x.q)),
        array_to_string(list_transform(top, lambda x: x.extra), ',')
 FROM (SELECT grp, arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf GROUP BY grp) ORDER BY grp;
+      FROM topk_multifield GROUP BY grp) ORDER BY grp;
 ----
 1	11	a,bb,ccc
 2	5	z
@@ -52,14 +52,14 @@ FROM (SELECT grp, arg_max(struct_pack(pad := pad, extra := extra, q := q), score
 query II
 SELECT list_sum(list_transform(top, lambda x: x.q)), length(top)
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 11	3
 
 query II
 SELECT length(top), list_sum(list_transform(top, lambda x: x.q))
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 3	11
 
@@ -67,7 +67,7 @@ FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) 
 query II
 SELECT list_sum(list_transform(top, lambda x: x.q)), top[1].pad
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 11	101
 
@@ -77,7 +77,7 @@ SELECT list_sum(list_transform(top, lambda x: x.q)),
        array_to_string(list_transform(top, lambda x: x.extra), ',')
 FROM (SELECT top FROM
       (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-       FROM c17_mf WHERE grp = 1));
+       FROM topk_multifield WHERE grp = 1));
 ----
 11	a,bb,ccc
 
@@ -87,7 +87,7 @@ SELECT list_sum(list_transform(z, lambda x: x.q)),
        array_to_string(list_transform(z, lambda x: x.extra), ',')
 FROM (SELECT y AS z FROM (SELECT top AS y FROM
       (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-       FROM c17_mf WHERE grp = 1)));
+       FROM topk_multifield WHERE grp = 1)));
 ----
 11	a,bb,ccc
 
@@ -97,7 +97,7 @@ SELECT list_sum(list_transform(a, lambda x: x.q)),
        array_to_string(list_transform(b, lambda x: x.extra), ',')
 FROM (SELECT top AS a, top AS b FROM
       (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-       FROM c17_mf WHERE grp = 1));
+       FROM topk_multifield WHERE grp = 1));
 ----
 11	a,bb,ccc
 
@@ -108,7 +108,7 @@ SELECT list_sum(list_transform(a, lambda x: x.q)),
 FROM (SELECT aa AS a, bb AS b FROM
       (SELECT top AS aa, top AS bb FROM
        (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-        FROM c17_mf WHERE grp = 1)));
+        FROM topk_multifield WHERE grp = 1)));
 ----
 11	a,bb,ccc
 
@@ -119,7 +119,7 @@ SELECT list_sum(list_transform(a, lambda x: x.q)),
        array_to_string(list_transform(b, lambda x: x.extra), ',')
 FROM (SELECT 42 AS unused, top AS a, top AS b FROM
       (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-       FROM c17_mf WHERE grp = 1));
+       FROM topk_multifield WHERE grp = 1));
 ----
 11	a,bb,ccc
 
@@ -128,7 +128,7 @@ query II
 SELECT list_sum(list_transform(a, lambda x: x.q)), b[1].pad
 FROM (SELECT top AS a, top AS b FROM
       (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-       FROM c17_mf WHERE grp = 1));
+       FROM topk_multifield WHERE grp = 1));
 ----
 11	101
 
@@ -136,7 +136,7 @@ FROM (SELECT top AS a, top AS b FROM
 query IT
 WITH topk AS NOT MATERIALIZED
   (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-   FROM c17_mf WHERE grp = 1)
+   FROM topk_multifield WHERE grp = 1)
 SELECT list_sum(list_transform(top, lambda x: x.q)),
        array_to_string(list_transform(top, lambda x: x.extra), ',') FROM topk;
 ----
@@ -146,7 +146,7 @@ SELECT list_sum(list_transform(top, lambda x: x.q)),
 query II
 WITH topk AS MATERIALIZED
   (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-   FROM c17_mf WHERE grp = 1)
+   FROM topk_multifield WHERE grp = 1)
 SELECT list_sum(list_transform(top, lambda x: x.q)), length(top) FROM topk;
 ----
 11	3
@@ -154,7 +154,7 @@ SELECT list_sum(list_transform(top, lambda x: x.q)), length(top) FROM topk;
 query I
 SELECT list_sum(list_transform(top, lambda x: coalesce(x.q, 0) + length(x.extra)))
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 17
 
@@ -163,7 +163,7 @@ query IT
 SELECT list_sum(list_transform(top, lambda x: x.q)),
        array_to_string(list_transform(top, lambda x: x.extra), ',')
 FROM (SELECT arg_max(struct_pack(pad := pad, extra := extra, q := q), score, 2) AS top
-      FROM c17_mf WHERE grp = 2);
+      FROM topk_multifield WHERE grp = 2);
 ----
 5	z
 
@@ -172,6 +172,6 @@ statement error
 SELECT list_sum(list_transform(top, lambda x: x.q)),
        array_to_string(list_transform(top, lambda x: x.extra), ',')
 FROM (SELECT arg_max(struct_pack(bad := CAST(extra AS INTEGER), extra := extra, q := q), score, 3) AS top
-      FROM c17_mf WHERE grp = 1);
+      FROM topk_multifield WHERE grp = 1);
 ----
 Could not convert string 'a' to INT32
