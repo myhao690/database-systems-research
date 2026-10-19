@@ -4,10 +4,10 @@ Both branches start from DuckDB `f2b0bad0eb3e47e2060f1f07af9d2069eaf77ea1`. Swit
 
 ## A: optimizer field demand
 
-1. `src/optimizer/remove_unused_columns.cpp`: eligibility and lineage helpers (`C17EligibleTopK`, `C17CollectTopKLineage`).
+1. `src/optimizer/remove_unused_columns.cpp`: eligibility and lineage helpers (`IsEligibleTopKPayload`, `CollectTopKLineage`).
 2. `RemoveUnusedColumns::VisitExpression`: recognize supported `list_transform` Lambda extraction and register field demand without elevating the whole `LIST` to a full-value demand.
 3. Projection and Aggregate branches: propagate demands through simple aliases, union multiple consumers, detect whole-value users.
-4. `C17TryPruneTopKImpl`: build a narrower `struct_pack` in original field order, rebind `arg_max`, `struct_extract`, Lambda and `list_transform`, then commit only after successful preparation. A narrowed `STRUCT` must remain a `STRUCT`; replacing it with a scalar changes NULL semantics.
+4. `TryPruneTopKPayloadImpl`: build a narrower `struct_pack` in original field order, rebind `arg_max`, `struct_extract`, Lambda and `list_transform`, then commit only after successful preparation. A narrowed `STRUCT` must remain a `STRUCT`; replacing it with a scalar changes NULL semantics.
 5. Test both `c17_argmax_payload_pruning.test` and `c17_argmax_payload_pruning_multifield.test`; unsupported forms must fall back.
 
 ## B: execution-side admission and encoding

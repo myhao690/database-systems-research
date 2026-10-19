@@ -11,7 +11,7 @@
 | [`execution-admission-aware-encoding`](../../tree/execution-admission-aware-encoding) | **B:** selective, batched Top-K payload sort-key encoding | `435d7a420d4a768e2f701c49a824b2682d57c1be` |
 | `main` | This project guide, portable net patches and selected evidence; engine code is otherwise at the baseline | Publication commit |
 
-The published A/B commits reproduce the **exact code trees** of the original local research commits while using a GitHub noreply author address; see [`docs/PUBLISHED_COMMITS.md`](docs/PUBLISHED_COMMITS.md) for both SHA mappings and tree IDs. A and B are **not** one default combined patch. Review each against [`baseline-f2b0`](../../tree/baseline-f2b0); the net patches are also in [`patches/`](patches/). The original DuckDB README is preserved on the [`baseline-f2b0` branch](https://github.com/myhao690/grouped-topk-payload-work/blob/baseline-f2b0/README.md).
+The initial published A/B commits reproduce the **exact code trees** of the original local research commits while using a GitHub noreply author address. A later A-only commit removes project prefixes from internal C++ names without changing the algorithm; the original commit remains in history. See [`docs/PUBLISHED_COMMITS.md`](docs/PUBLISHED_COMMITS.md) for SHA and tree mappings. A and B are **not** one default combined patch. Review each against [`baseline-f2b0`](../../tree/baseline-f2b0); the net patches are also in [`patches/`](patches/). The original DuckDB README is preserved on the [`baseline-f2b0` branch](https://github.com/myhao690/grouped-topk-payload-work/blob/baseline-f2b0/README.md).
 
 ### A — consumer-driven payload pruning
 
@@ -23,7 +23,7 @@ For supported full-`STRUCT` Top-K aggregates, the update path estimates whether 
 
 ## Selected evidence, not universal speedup claims
 
-The measurements below are from fixed Release `-O3 -DNDEBUG` builds on one Apple Silicon machine. Timed queries used warmups, alternating/ABBA sessions, nine measured runs per session, in-process complete result consumption, and no outlier deletion. The published [`evidence/`](evidence/) includes selected SQL, all formal raw timing rows and summaries; absolute local library paths were replaced by variant labels in the public CSVs, with original file hashes documented in [`docs/EVIDENCE_PROVENANCE.md`](docs/EVIDENCE_PROVENANCE.md). Large database files, profiler traces and binaries are **not** committed.
+The measurements below predate the A-only internal naming cleanup and are from fixed Release `-O3 -DNDEBUG` builds on one Apple Silicon machine. The cleanup was rebuilt and its targeted SQL tests passed with the optimization both ON and OFF; performance was not remeasured. Timed queries used warmups, alternating/ABBA sessions, nine measured runs per session, in-process complete result consumption, and no outlier deletion. The published [`evidence/`](evidence/) includes selected SQL, all formal raw timing rows and summaries; absolute local library paths were replaced by variant labels in the public CSVs, with original file hashes documented in [`docs/EVIDENCE_PROVENANCE.md`](docs/EVIDENCE_PROVENANCE.md). Large database files, profiler traces and binaries are **not** committed.
 
 | Workload | Native baseline | Relevant branch | Median SQL wall time | Observation |
 |---|---:|---:|---|---|
