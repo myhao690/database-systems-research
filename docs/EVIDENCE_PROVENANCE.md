@@ -14,3 +14,5 @@ Source SHA-256 hashes before redaction/copy:
 | `20261018_011` | `summary.csv` | `6c2f1d6e6a6fe375c9c9f909d93482c9a0ce180397d0c999d45d85bf56f57da5` |
 
 The original full experiment directories are retained in the local `results/aggregate_pruning/experiments/` archive. Public CSVs are a selected evidence subset; large database inputs, binary drivers, full profiler traces and machine-local logs are not included.
+
+In the current publication, the first-line project-label comments in two rail SQL files were normalized. Their executable SQL bodies and all raw measurement CSVs remain unchanged.
