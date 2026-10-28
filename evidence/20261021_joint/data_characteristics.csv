@@ -1,0 +1,7 @@
+size,group_key,groups,rows,min_group,mean_group,median_group,p95_group,max_group,groups_le_k3,groups_le_k10
+sf01,l_partkey,20000,600572,11,30.029,30.0,39.0,56,0,0
+sf01,l_suppkey,1000,600572,525,600.572,600.0,641.05,702,0,0
+sf1,l_partkey,200000,6001215,9,30.006,30.0,39.0,57,0,5
+sf1,l_suppkey,10000,6001215,517,600.122,600.0,641.0,694,0,0
+sf3,l_partkey,600000,17996609,10,29.994,30.0,39.0,58,0,11
+sf3,l_suppkey,30000,17996609,494,599.887,600.0,640.0,700,0,0

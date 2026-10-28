@@ -58,6 +58,8 @@ The archived measurements used Release `-O3 -DNDEBUG` on one Apple Silicon machi
 
 The branch heads were rebuilt and related SQLLogicTests passed after the naming-only cleanup. For independent review, use **separate Release build directories** for A and B:
 
+The later [same-SQL four-arm study](docs/JOINT_STUDY.md) tests baseline, A, B and their diagnostic combination on SF1/SF3 and an independent rail dataset. It confirms cases where B adds value after A, but also records monotone-score and four-thread cases with little or no B benefit. Its [raw samples and SQL](evidence/20261021_joint/) are published separately from the earlier A-only/B-only measurements.
+
 ```sh
 # From the repository root: A
 git switch optimizer-field-pruning
