@@ -1,0 +1,152 @@
+diff --git a/src/common/types/row/tuple_data_allocator.cpp b/src/common/types/row/tuple_data_allocator.cpp
+index 45bd4791692b..fc68ad480650 100644
+--- a/src/common/types/row/tuple_data_allocator.cpp
++++ b/src/common/types/row/tuple_data_allocator.cpp
+@@ -243,7 +243,10 @@ TupleDataAllocator::BuildChunkPart(TupleDataSegment &segment, TupleDataPinState
+                                    TupleDataChunkState &chunk_state, const idx_t append_offset,
+                                    const idx_t append_count, TupleDataChunk &chunk) {
+ 	D_ASSERT(append_count != 0);
+-	auto result_ptr = stl_allocator->MakeUnsafePtr<TupleDataChunkPart>(chunk.lock.get());
++	auto result_ptr = std::move(segment.spare_chunk_part);
++	if (!result_ptr) {
++		result_ptr = stl_allocator->MakeUnsafePtr<TupleDataChunkPart>(chunk.lock.get());
++	}
+ 	auto &result = *result_ptr;
+ 	const auto block_size = buffer_manager.GetBlockSize();
+ 
+diff --git a/src/common/types/row/tuple_data_segment.cpp b/src/common/types/row/tuple_data_segment.cpp
+index ff69b1a1b857..3fbbf0270635 100644
+--- a/src/common/types/row/tuple_data_segment.cpp
++++ b/src/common/types/row/tuple_data_segment.cpp
+@@ -80,6 +80,8 @@ void TupleDataChunk::MergeLastChunkPart(TupleDataSegment &segment) {
+ 		if (segment.chunk_parts.size() == part_ids.End()) {
+ 			// Can only remove if the part we're merging was the last added chunk part
+ 			// If not, we just leave it there (no chunk will reference it anyway)
++			D_ASSERT(!segment.spare_chunk_part);
++			segment.spare_chunk_part = std::move(segment.chunk_parts.back());
+ 			segment.chunk_parts.pop_back();
+ 		}
+ 		part_ids.DecrementMax();
+@@ -87,11 +89,13 @@ void TupleDataChunk::MergeLastChunkPart(TupleDataSegment &segment) {
+ 	}
+ 
+ 	if (last.heap_block_index == second_to_last.heap_block_index &&
+-	    last.heap_block_offset == second_to_last.heap_block_index + second_to_last.total_heap_size &&
++	    last.heap_block_offset == second_to_last.heap_block_offset + second_to_last.total_heap_size &&
+ 	    last.base_heap_ptr == second_to_last.base_heap_ptr) { // There is a heap and it aligns - merge
+ 		second_to_last.total_heap_size += last.total_heap_size;
+ 		second_to_last.count += last.count;
+ 		if (segment.chunk_parts.size() == part_ids.End()) {
++			D_ASSERT(!segment.spare_chunk_part);
++			segment.spare_chunk_part = std::move(segment.chunk_parts.back());
+ 			segment.chunk_parts.pop_back(); // Same as above
+ 		}
+ 		part_ids.DecrementMax();
+diff --git a/src/include/duckdb/common/types/row/tuple_data_segment.hpp b/src/include/duckdb/common/types/row/tuple_data_segment.hpp
+index 5dc82b1bc788..3b0fc8e4fcce 100644
+--- a/src/include/duckdb/common/types/row/tuple_data_segment.hpp
++++ b/src/include/duckdb/common/types/row/tuple_data_segment.hpp
+@@ -179,6 +179,8 @@ public:
+ 	unsafe_vector<unsafe_arena_ptr<TupleDataChunk>> chunks;
+ 	//! The chunk parts of this segment
+ 	unsafe_vector<unsafe_arena_ptr<TupleDataChunkPart>> chunk_parts;
++	//! Reuse a part removed by merging instead of growing the arena on every append
++	unsafe_arena_ptr<TupleDataChunkPart> spare_chunk_part;
+ 	//! The tuple count of this segment
+ 	idx_t count;
+ 	//! The data size of this segment
+diff --git a/test/common/test_tuple_data_allocation.cpp b/test/common/test_tuple_data_allocation.cpp
+index 7337208a4c90..dc4be2743960 100644
+--- a/test/common/test_tuple_data_allocation.cpp
++++ b/test/common/test_tuple_data_allocation.cpp
+@@ -1,5 +1,6 @@
+ #include "catch.hpp"
+ #include "duckdb.hpp"
++#include "duckdb/common/types/row/tuple_data_allocator.hpp"
+ #include "duckdb/common/types/row/tuple_data_collection.hpp"
+ #include "duckdb/common/types/row/tuple_data_iterator.hpp"
+ #include "duckdb/common/vector/vector_writer.hpp"
+@@ -7,6 +8,83 @@
+ 
+ namespace duckdb {
+ 
++TEST_CASE("Tuple data merges adjacent variable-size chunk parts and retains one spare", "[tuple_data_allocation]") {
++	DuckDB db(nullptr);
++	Connection con(db);
++	auto &buffer_manager = BufferManager::GetBufferManager(*con.context);
++	auto layout = make_shared_ptr<TupleDataLayout>();
++	layout->Initialize({LogicalType::VARCHAR}, TupleDataValidityType::CAN_HAVE_NULL_VALUES);
++	auto arena = make_shared_ptr<ArenaAllocator>(buffer_manager.GetBufferAllocator());
++	auto allocator = make_shared_ptr<TupleDataAllocator>(buffer_manager, layout, MemoryTag::HASH_TABLE, arena);
++	TupleDataSegment segment(allocator);
++	TupleDataChunk chunk(*arena->Make<mutex>());
++	const auto heap_ptr = arena->Allocate(128);
++
++	auto first = arena->MakeUnsafePtr<TupleDataChunkPart>(chunk.lock.get());
++	first->row_block_index = 0;
++	first->row_block_offset = 0;
++	first->heap_block_index = 0;
++	first->heap_block_offset = 100;
++	first->total_heap_size = 50;
++	first->base_heap_ptr = heap_ptr;
++	first->count = 1;
++	chunk.AddPart(segment, std::move(first));
++
++	auto second = arena->MakeUnsafePtr<TupleDataChunkPart>(chunk.lock.get());
++	second->row_block_index = 0;
++	second->row_block_offset = NumericCast<uint32_t>(layout->GetRowWidth());
++	second->heap_block_index = 0;
++	second->heap_block_offset = 150;
++	second->total_heap_size = 30;
++	second->base_heap_ptr = heap_ptr;
++	second->count = 1;
++	auto *second_ptr = second.get();
++	chunk.AddPart(segment, std::move(second));
++
++	chunk.MergeLastChunkPart(segment);
++	REQUIRE(chunk.part_ids.Size() == 1);
++	REQUIRE(chunk.count == 2);
++	REQUIRE(segment.chunk_parts.size() == 1);
++	REQUIRE(segment.chunk_parts[0]->count == 2);
++	REQUIRE(segment.chunk_parts[0]->total_heap_size == 80);
++	REQUIRE(segment.spare_chunk_part.get() == second_ptr);
++
++	auto nonadjacent = std::move(segment.spare_chunk_part);
++	nonadjacent->row_block_offset = NumericCast<uint32_t>(2 * layout->GetRowWidth());
++	nonadjacent->heap_block_offset = 181;
++	nonadjacent->total_heap_size = 10;
++	nonadjacent->count = 1;
++	chunk.AddPart(segment, std::move(nonadjacent));
++	chunk.MergeLastChunkPart(segment);
++	REQUIRE(chunk.part_ids.Size() == 2);
++	REQUIRE(segment.chunk_parts.size() == 2);
++	REQUIRE(!segment.spare_chunk_part);
++}
++
++TEST_CASE("Tuple data reuses merged variable-size metadata across appends", "[tuple_data_allocation]") {
++	DuckDB db(nullptr);
++	Connection con(db);
++	auto &buffer_manager = BufferManager::GetBufferManager(*con.context);
++	vector<LogicalType> types {LogicalType::VARCHAR};
++	auto layout = make_shared_ptr<TupleDataLayout>();
++	layout->Initialize(types, TupleDataValidityType::CAN_HAVE_NULL_VALUES);
++	auto arena = make_shared_ptr<ArenaAllocator>(buffer_manager.GetBufferAllocator());
++	TupleDataCollection collection(buffer_manager, layout, MemoryTag::HASH_TABLE, arena);
++	TupleDataAppendState append_state;
++	collection.InitializeAppend(append_state);
++	DataChunk chunk;
++	chunk.Initialize(Allocator::DefaultAllocator(), types);
++	for (idx_t i = 0; i < 8192; i++) {
++		chunk.Reset();
++		auto writer = FlatVector::Writer<string_t>(chunk.data[0], 1);
++		writer.WriteValue(string_t("abcdefghijklmnopqrst"));
++		collection.Append(append_state, chunk);
++	}
++	collection.FinalizePinState(append_state.pin_state);
++	REQUIRE(collection.Count() == 8192);
++	REQUIRE(arena->AllocationSize() < 128 * 1024);
++}
++
+ TEST_CASE("Tuple data allocation accounting follows retained blocks", "[tuple_data_allocation]") {
+ 	DuckDB db(nullptr);
+ 	Connection con(db);

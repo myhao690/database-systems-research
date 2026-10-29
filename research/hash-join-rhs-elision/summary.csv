@@ -1,0 +1,3 @@
+query,off_median_ms,on_median_ms,off_min_ms,off_max_ms,on_min_ms,on_max_ms,speedup_off_over_on
+q1_count,60.945333,44.053145,57.556000,89.305667,42.872833,50.028667,1.383450
+q2_checksum,81.030771,81.508125,77.288542,103.989459,76.557875,96.991459,0.994143

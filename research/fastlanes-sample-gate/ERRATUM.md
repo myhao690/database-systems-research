@@ -1,0 +1,3 @@
+# Correctness qualification for the exploratory FSST12 gate
+
+The earlier phase-1–4 roundtrip comparator skipped source-NULL cells and did not compare decoded NULL flags. Its reported PASS counts therefore verify compared non-NULL values, **not** preservation of NULL semantics. The generated NULL test was insufficient, and native FastLanes also exhibited a separate NULL-title loss on an external mixed-string dataset. Phase 6 stopped before treatment timing. The recorded phase-4 writer time and file-size measurements remain measurements, but they cannot justify a safe production gate or upstream PR. Phase-5 AG News used a corrected logical validator and was essentially neutral. This experimental patch is archived for study, not recommended for deployment.

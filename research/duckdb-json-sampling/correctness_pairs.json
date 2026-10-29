@@ -1,0 +1,137 @@
+[
+  {
+    "case": "hetero_infer",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s,count(new_text) extra FROM read_json('/tmp/c17_json_gate_20261025/correctness/hetero32/*.json',union_by_name=true);",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s,extra\n32,528,1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s,extra\n32,528,1\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "hetero_explicit_columns",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s FROM read_json('/tmp/c17_json_gate_20261025/correctness/hetero32/*.json',columns={id:'INT'});",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s\n32,528\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s\n32,528\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "hetero_sample_all",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s,count(new_text) extra FROM read_json('/tmp/c17_json_gate_20261025/correctness/hetero32/*.json',union_by_name=true,sample_size=-1);",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s,extra\n32,528,1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s,extra\n32,528,1\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "array",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s FROM read_json('/tmp/c17_json_gate_20261025/correctness/array/*.json');",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s\n6,9\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s\n6,9\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "ndjson_parallel",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s FROM read_json('/tmp/c17_json_gate_20261025/correctness/ndjson/*.json');",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s\n9,18\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s\n9,18\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "gzip",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s FROM read_json('/tmp/c17_json_gate_20261025/correctness/gzip/*.json.gz');",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s\n6,9\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s\n6,9\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "empty",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,sum(id) s FROM read_json('/tmp/c17_json_gate_20261025/correctness/empty/*.json');",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,s\n3,3\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,s\n3,3\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "large_value",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n,max(length(payload)) len FROM read_json('/tmp/c17_json_gate_20261025/correctness/large/*.json');",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 0,
+      "stdout": "n,len\n1,8388608\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "rc": 0,
+      "stdout": "n,len\n1,8388608\n",
+      "stderr": ""
+    }
+  },
+  {
+    "case": "malformed_error",
+    "sql": "SET threads=4;SET memory_limit='1500MB';SELECT count(*) n FROM read_json('/tmp/c17_json_gate_20261025/correctness/malformed/*.json');",
+    "match_rc_and_stdout": true,
+    "baseline": {
+      "rc": 1,
+      "stdout": "",
+      "stderr": "Invalid Input Error: Malformed JSON in file \"/tmp/c17_json_gate_20261025/correctness/malformed/f0.json\", at byte 8 in line 3: unexpected end of data. \n\nLINE 1: ... count(*) n FROM read_json('/tmp/c17_json_gate_20261025/correctness/malformed/*.json');\n                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+    },
+    "candidate": {
+      "rc": 1,
+      "stdout": "",
+      "stderr": "Invalid Input Error: Malformed JSON in file \"/tmp/c17_json_gate_20261025/correctness/malformed/f0.json\", at byte 8 in line 3: unexpected end of data. \n\nLINE 1: ... count(*) n FROM read_json('/tmp/c17_json_gate_20261025/correctness/malformed/*.json');\n                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
+    }
+  }
+]

@@ -1,0 +1,200 @@
+[
+  {
+    "rep": 0,
+    "variant": "baseline",
+    "memory_limit": "200MB",
+    "rc": 1,
+    "wall_s": 0.17922004172578454,
+    "max_rss_bytes": 64421888,
+    "stdout": "",
+    "stderr": "mber of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\nLINE 1: ...)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');\n                                                                   ^^^^^^^^^^^^^^^^^^\n        0.17 real         0.04 user         0.03 sys\n            64421888  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3068  page reclaims\n                1136  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                 977  involuntary context switches\n           665871079  instructions retired\n           300571651  cycles elapsed\n            46252608  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 0,
+    "variant": "candidate",
+    "memory_limit": "200MB",
+    "rc": 0,
+    "wall_s": 0.291596416849643,
+    "max_rss_bytes": 61227008,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.28 real         0.18 user         0.04 sys\n            61227008  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                2785  page reclaims\n                1224  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                1111  involuntary context switches\n          2273320161  instructions retired\n           811987355  cycles elapsed\n            41583072  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 0,
+    "variant": "baseline",
+    "memory_limit": "500MB",
+    "rc": 1,
+    "wall_s": 0.11045833257958293,
+    "max_rss_bytes": 73449472,
+    "stdout": "",
+    "stderr": "mber of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\nLINE 1: ...)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');\n                                                                   ^^^^^^^^^^^^^^^^^^\n        0.10 real         0.08 user         0.01 sys\n            73449472  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4718  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 389  involuntary context switches\n           975740314  instructions retired\n           351387947  cycles elapsed\n            55427864  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='500MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 0,
+    "variant": "candidate",
+    "memory_limit": "500MB",
+    "rc": 0,
+    "wall_s": 0.2161775422282517,
+    "max_rss_bytes": 63258624,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.21 real         0.18 user         0.02 sys\n            63258624  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4098  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 587  involuntary context switches\n          2162164749  instructions retired\n           734862744  cycles elapsed\n            43631096  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='500MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 0,
+    "variant": "baseline",
+    "memory_limit": "1200MB",
+    "rc": 0,
+    "wall_s": 0.25649337470531464,
+    "max_rss_bytes": 97124352,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.25 real         0.18 user         0.02 sys\n            97124352  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                6029  page reclaims\n                 173  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 515  involuntary context switches\n          2192893897  instructions retired\n           751787388  cycles elapsed\n            78021880  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='1200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 0,
+    "variant": "candidate",
+    "memory_limit": "1200MB",
+    "rc": 0,
+    "wall_s": 0.2127887080423534,
+    "max_rss_bytes": 63045632,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.20 real         0.18 user         0.01 sys\n            63045632  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4081  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 416  involuntary context switches\n          2163746818  instructions retired\n           717123059  cycles elapsed\n            43434512  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='1200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 1,
+    "variant": "candidate",
+    "memory_limit": "1200MB",
+    "rc": 0,
+    "wall_s": 0.2199177499860525,
+    "max_rss_bytes": 63324160,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.21 real         0.18 user         0.02 sys\n            63324160  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4099  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 558  involuntary context switches\n          2168721821  instructions retired\n           737515654  cycles elapsed\n            43696632  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='1200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 1,
+    "variant": "baseline",
+    "memory_limit": "1200MB",
+    "rc": 0,
+    "wall_s": 0.22487033298239112,
+    "max_rss_bytes": 96747520,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.22 real         0.18 user         0.02 sys\n            96747520  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                6140  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 717  involuntary context switches\n          2179725289  instructions retired\n           742792386  cycles elapsed\n            77645048  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='1200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 1,
+    "variant": "candidate",
+    "memory_limit": "500MB",
+    "rc": 0,
+    "wall_s": 0.2512787920422852,
+    "max_rss_bytes": 63291392,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.24 real         0.19 user         0.02 sys\n            63291392  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4100  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 698  involuntary context switches\n          2162258020  instructions retired\n           742901811  cycles elapsed\n            43663864  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='500MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 1,
+    "variant": "baseline",
+    "memory_limit": "500MB",
+    "rc": 1,
+    "wall_s": 0.12139241676777601,
+    "max_rss_bytes": 75399168,
+    "stdout": "",
+    "stderr": "mber of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\nLINE 1: ...)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');\n                                                                   ^^^^^^^^^^^^^^^^^^\n        0.11 real         0.08 user         0.01 sys\n            75399168  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4840  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 387  involuntary context switches\n           976822410  instructions retired\n           357460533  cycles elapsed\n            57393968  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='500MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 1,
+    "variant": "candidate",
+    "memory_limit": "200MB",
+    "rc": 0,
+    "wall_s": 0.22236454160884023,
+    "max_rss_bytes": 63160320,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.21 real         0.18 user         0.02 sys\n            63160320  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4090  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 442  involuntary context switches\n          2172964420  instructions retired\n           731929688  cycles elapsed\n            43549200  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 1,
+    "variant": "baseline",
+    "memory_limit": "200MB",
+    "rc": 1,
+    "wall_s": 0.07185216713696718,
+    "max_rss_bytes": 64438272,
+    "stdout": "",
+    "stderr": "mber of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\nLINE 1: ...)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');\n                                                                   ^^^^^^^^^^^^^^^^^^\n        0.06 real         0.04 user         0.01 sys\n            64438272  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4169  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 390  involuntary context switches\n           567214691  instructions retired\n           210449291  cycles elapsed\n            46285400  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 2,
+    "variant": "baseline",
+    "memory_limit": "200MB",
+    "rc": 1,
+    "wall_s": 0.05893975030630827,
+    "max_rss_bytes": 52887552,
+    "stdout": "",
+    "stderr": "mber of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\nLINE 1: ...)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');\n                                                                   ^^^^^^^^^^^^^^^^^^\n        0.05 real         0.04 user         0.00 sys\n            52887552  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3465  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 297  involuntary context switches\n           557620405  instructions retired\n           192986771  cycles elapsed\n            34701864  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 2,
+    "variant": "candidate",
+    "memory_limit": "200MB",
+    "rc": 0,
+    "wall_s": 0.21649879217147827,
+    "max_rss_bytes": 61702144,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.21 real         0.18 user         0.02 sys\n            61702144  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4003  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 479  involuntary context switches\n          2165248183  instructions retired\n           724421933  cycles elapsed\n            42058208  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 2,
+    "variant": "baseline",
+    "memory_limit": "500MB",
+    "rc": 1,
+    "wall_s": 0.10882716719061136,
+    "max_rss_bytes": 72450048,
+    "stdout": "",
+    "stderr": "mber of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\nLINE 1: ...)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');\n                                                                   ^^^^^^^^^^^^^^^^^^\n        0.10 real         0.08 user         0.01 sys\n            72450048  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4659  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 432  involuntary context switches\n           976677352  instructions retired\n           356316832  cycles elapsed\n            54461256  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='500MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 2,
+    "variant": "candidate",
+    "memory_limit": "500MB",
+    "rc": 0,
+    "wall_s": 0.2657752917148173,
+    "max_rss_bytes": 63881216,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.26 real         0.19 user         0.02 sys\n            63881216  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4137  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 633  involuntary context switches\n          2163423635  instructions retired\n           753805090  cycles elapsed\n            44253688  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='500MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 2,
+    "variant": "baseline",
+    "memory_limit": "1200MB",
+    "rc": 0,
+    "wall_s": 0.26193924993276596,
+    "max_rss_bytes": 99090432,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.25 real         0.20 user         0.02 sys\n            99090432  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                6284  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 803  involuntary context switches\n          2188411894  instructions retired\n           782776318  cycles elapsed\n            79971552  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='1200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  },
+  {
+    "rep": 2,
+    "variant": "candidate",
+    "memory_limit": "1200MB",
+    "rc": 0,
+    "wall_s": 0.23922379221767187,
+    "max_rss_bytes": 64208896,
+    "stdout": "n,bytes\n32,33554432\n",
+    "stderr": "        0.23 real         0.19 user         0.02 sys\n            64208896  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4154  page reclaims\n                  37  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 639  involuntary context switches\n          2169503518  instructions retired\n           738116568  cycles elapsed\n            44581368  peak memory footprint\n",
+    "sql": "SET threads=1;SET memory_limit='1200MB';SELECT count(*) AS n,sum(length(payload)) AS bytes FROM read_json('/tmp/c17_json_gate_20261025/medium32/*.json');"
+  }
+]

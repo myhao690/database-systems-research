@@ -1,0 +1,50 @@
+diff --git a/extension/json/json_functions/read_json.cpp b/extension/json/json_functions/read_json.cpp
+index 1dc7f69fcd0d..4fff91fbf91f 100644
+--- a/extension/json/json_functions/read_json.cpp
++++ b/extension/json/json_functions/read_json.cpp
+@@ -123,6 +123,8 @@ public:
+ 		auto_detect_state.bytes_scanned += total_read_size;
+ 		auto_detect_state.tuples_scanned += total_tuple_count;
+ 		++auto_detect_state.files_scanned;
++		// The schema scan is complete; do not retain its final buffer in the sampled reader.
++		scan_state.ClearBufferHandle();
+ 
+ 		return remaining;
+ 	}
+diff --git a/test/sql/json/table/read_json_schema_buffer_release.test b/test/sql/json/table/read_json_schema_buffer_release.test
+new file mode 100644
+index 000000000000..af8569253005
+--- /dev/null
++++ b/test/sql/json/table/read_json_schema_buffer_release.test
+@@ -0,0 +1,31 @@
++# name: test/sql/json/table/read_json_schema_buffer_release.test
++# description: Schema sampling of tiny JSON files must not retain an empty maximum-sized buffer per file
++# group: [table]
++
++require json
++
++loop i 0 31
++
++statement ok
++COPY (SELECT 1 AS id) TO '{TEST_DIR}/f{i}.json' (FORMAT json);
++
++endloop
++
++statement ok
++COPY (SELECT 1 AS id, 'last' AS marker) TO '{TEST_DIR}/fzz.json' (FORMAT json);
++
++statement ok
++SET threads=1;
++
++statement ok
++SET memory_limit='500MB';
++
++query II
++SELECT count(*), count(marker) FROM read_json('{TEST_DIR}/f*.json');
++----
++32	1
++
++query II
++SELECT count(*), count(marker) FROM read_json('{TEST_DIR}/f*.json', union_by_name=true);
++----
++32	1

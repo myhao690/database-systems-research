@@ -1,0 +1,132 @@
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 1, "entries": 9864, "seconds": 0.051151541993021965, "file_bytes": 4813258}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 2, "entries": 19728, "seconds": 0.12281387485563755, "file_bytes": 9626347}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 3, "entries": 29592, "seconds": 0.15225554211065173, "file_bytes": 14439436}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 4, "entries": 39456, "seconds": 0.20049958303570747, "file_bytes": 19252525}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 5, "entries": 49320, "seconds": 0.2471172078512609, "file_bytes": 24065614}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 6, "entries": 59184, "seconds": 0.3058584160171449, "file_bytes": 28878703}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 7, "entries": 69048, "seconds": 0.35121774999424815, "file_bytes": 33691792}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 8, "entries": 78912, "seconds": 0.3954423749819398, "file_bytes": 38504881}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 9, "entries": 88776, "seconds": 0.4523731251247227, "file_bytes": 43317970}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 10, "entries": 98640, "seconds": 0.49617083417251706, "file_bytes": 48131059}
+{"kind": "summary", "dataset": "reviews", "mode": "full", "queries": 10, "contexts_per_query": 10000, "entries": 98640, "restored_entries": 98640, "total_save_seconds": 2.7749002501368523, "finalize_seconds": 0.0, "load_seconds": 0.11407004203647375, "total_file_bytes_written": 264721585, "final_file_bytes": 48131059, "write_amplification": 5.500015800608086, "peak_rss_bytes": 260276224}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 1, "entries": 9864, "seconds": 0.058671833015978336, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 2, "entries": 19728, "seconds": 0.0551022500731051, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 3, "entries": 29592, "seconds": 0.05489304196089506, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 4, "entries": 39456, "seconds": 0.05351729178801179, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 5, "entries": 49320, "seconds": 0.0525820842012763, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 6, "entries": 59184, "seconds": 0.05348779167979956, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 7, "entries": 69048, "seconds": 0.054297707974910736, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 8, "entries": 78912, "seconds": 0.0533208753913641, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 9, "entries": 88776, "seconds": 0.05281366687268019, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 10, "entries": 98640, "seconds": 0.05508479103446007, "file_bytes": 4813235}
+{"kind": "summary", "dataset": "reviews", "mode": "incremental", "queries": 10, "contexts_per_query": 10000, "entries": 98640, "restored_entries": 98640, "total_save_seconds": 0.5437713339924812, "finalize_seconds": 0.5115399588830769, "load_seconds": 0.11465420806780457, "total_file_bytes_written": 96263410, "final_file_bytes": 48131060, "write_amplification": 2.0000268018198644, "peak_rss_bytes": 260964352}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 1, "entries": 1000, "seconds": 0.013294791802763939, "file_bytes": 3946329}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 2, "entries": 2000, "seconds": 0.025466708932071924, "file_bytes": 7892489}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 3, "entries": 3000, "seconds": 0.038895916659384966, "file_bytes": 11838649}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 4, "entries": 4000, "seconds": 0.048889417201280594, "file_bytes": 15784809}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 5, "entries": 5000, "seconds": 0.05938487499952316, "file_bytes": 19730969}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 6, "entries": 6000, "seconds": 0.07210212526842952, "file_bytes": 23677129}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 7, "entries": 7000, "seconds": 0.08361887466162443, "file_bytes": 27623289}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 8, "entries": 8000, "seconds": 0.09481883328408003, "file_bytes": 31569449}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 9, "entries": 9000, "seconds": 0.10762479202821851, "file_bytes": 35515609}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 10, "entries": 10000, "seconds": 0.1221152083016932, "file_bytes": 39461769}
+{"kind": "summary", "dataset": "emails", "mode": "full", "queries": 10, "contexts_per_query": 1000, "entries": 10000, "restored_entries": 10000, "total_save_seconds": 0.6662115431390703, "finalize_seconds": 0.0, "load_seconds": 0.05753724975511432, "total_file_bytes_written": 217040490, "final_file_bytes": 39461769, "write_amplification": 5.500019271817236, "peak_rss_bytes": 164134912}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 1, "entries": 1000, "seconds": 0.0129891661927104, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 2, "entries": 2000, "seconds": 0.01330883288756013, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 3, "entries": 3000, "seconds": 0.012749374844133854, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 4, "entries": 4000, "seconds": 0.0129182911477983, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 5, "entries": 5000, "seconds": 0.012908542063087225, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 6, "entries": 6000, "seconds": 0.012909832876175642, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 7, "entries": 7000, "seconds": 0.012935291975736618, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 8, "entries": 8000, "seconds": 0.013201457913964987, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 9, "entries": 9000, "seconds": 0.013236833736300468, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 10, "entries": 10000, "seconds": 0.01337641617283225, "file_bytes": 3946306}
+{"kind": "summary", "dataset": "emails", "mode": "incremental", "queries": 10, "contexts_per_query": 1000, "entries": 10000, "restored_entries": 10000, "total_save_seconds": 0.13053403981029987, "finalize_seconds": 0.11981624970212579, "load_seconds": 0.05458249989897013, "total_file_bytes_written": 78924830, "final_file_bytes": 39461770, "write_amplification": 2.0000326898666736, "peak_rss_bytes": 164118528}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 1, "entries": 9864, "seconds": 0.055290082935243845, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 2, "entries": 19728, "seconds": 0.053832583129405975, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 3, "entries": 29592, "seconds": 0.05414362484589219, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 4, "entries": 39456, "seconds": 0.05407866695895791, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 5, "entries": 49320, "seconds": 0.053938624914735556, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 6, "entries": 59184, "seconds": 0.054102708119899035, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 7, "entries": 69048, "seconds": 0.06093049980700016, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 8, "entries": 78912, "seconds": 0.05968779092654586, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 9, "entries": 88776, "seconds": 0.06610870780423284, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 10, "entries": 98640, "seconds": 0.061897875275462866, "file_bytes": 4813235}
+{"kind": "summary", "dataset": "reviews", "mode": "incremental", "queries": 10, "contexts_per_query": 10000, "entries": 98640, "restored_entries": 98640, "total_save_seconds": 0.5740111647173762, "finalize_seconds": 0.5439669168554246, "load_seconds": 0.11324125016108155, "total_file_bytes_written": 96263410, "final_file_bytes": 48131060, "write_amplification": 2.0000268018198644, "peak_rss_bytes": 262144000}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 1, "entries": 9864, "seconds": 0.051776417065411806, "file_bytes": 4813258}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 2, "entries": 19728, "seconds": 0.10382779082283378, "file_bytes": 9626347}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 3, "entries": 29592, "seconds": 0.15210375003516674, "file_bytes": 14439436}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 4, "entries": 39456, "seconds": 0.19945670804008842, "file_bytes": 19252525}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 5, "entries": 49320, "seconds": 0.248410957865417, "file_bytes": 24065614}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 6, "entries": 59184, "seconds": 0.3052442502230406, "file_bytes": 28878703}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 7, "entries": 69048, "seconds": 0.3516434580087662, "file_bytes": 33691792}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 8, "entries": 78912, "seconds": 0.3953601252287626, "file_bytes": 38504881}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 9, "entries": 88776, "seconds": 0.4560783342458308, "file_bytes": 43317970}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 10, "entries": 98640, "seconds": 0.5005871248431504, "file_bytes": 48131059}
+{"kind": "summary", "dataset": "reviews", "mode": "full", "queries": 10, "contexts_per_query": 10000, "entries": 98640, "restored_entries": 98640, "total_save_seconds": 2.7644889163784683, "finalize_seconds": 0.0, "load_seconds": 0.10860599996522069, "total_file_bytes_written": 264721585, "final_file_bytes": 48131059, "write_amplification": 5.500015800608086, "peak_rss_bytes": 263110656}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 1, "entries": 1000, "seconds": 0.013203541282564402, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 2, "entries": 2000, "seconds": 0.013309166301041842, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 3, "entries": 3000, "seconds": 0.016603750176727772, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 4, "entries": 4000, "seconds": 0.013906375039368868, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 5, "entries": 5000, "seconds": 0.013941791839897633, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 6, "entries": 6000, "seconds": 0.01423858292400837, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 7, "entries": 7000, "seconds": 0.01459879195317626, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 8, "entries": 8000, "seconds": 0.0153396250680089, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 9, "entries": 9000, "seconds": 0.0141698750667274, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 10, "entries": 10000, "seconds": 0.014042957685887814, "file_bytes": 3946306}
+{"kind": "summary", "dataset": "emails", "mode": "incremental", "queries": 10, "contexts_per_query": 1000, "entries": 10000, "restored_entries": 10000, "total_save_seconds": 0.14335445733740926, "finalize_seconds": 0.12039324967190623, "load_seconds": 0.052844957914203405, "total_file_bytes_written": 78924830, "final_file_bytes": 39461770, "write_amplification": 2.0000326898666736, "peak_rss_bytes": 164364288}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 1, "entries": 1000, "seconds": 0.012309083249419928, "file_bytes": 3946329}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 2, "entries": 2000, "seconds": 0.025463625323027372, "file_bytes": 7892489}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 3, "entries": 3000, "seconds": 0.03673429088667035, "file_bytes": 11838649}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 4, "entries": 4000, "seconds": 0.04940370889380574, "file_bytes": 15784809}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 5, "entries": 5000, "seconds": 0.06346712494269013, "file_bytes": 19730969}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 6, "entries": 6000, "seconds": 0.0730326659977436, "file_bytes": 23677129}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 7, "entries": 7000, "seconds": 0.08316320786252618, "file_bytes": 27623289}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 8, "entries": 8000, "seconds": 0.09648712491616607, "file_bytes": 31569449}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 9, "entries": 9000, "seconds": 0.10685345809906721, "file_bytes": 35515609}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 10, "entries": 10000, "seconds": 0.1288016252219677, "file_bytes": 39461769}
+{"kind": "summary", "dataset": "emails", "mode": "full", "queries": 10, "contexts_per_query": 1000, "entries": 10000, "restored_entries": 10000, "total_save_seconds": 0.6757159153930843, "finalize_seconds": 0.0, "load_seconds": 0.05850762501358986, "total_file_bytes_written": 217040490, "final_file_bytes": 39461769, "write_amplification": 5.500019271817236, "peak_rss_bytes": 164364288}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 1, "entries": 9864, "seconds": 0.05164112476631999, "file_bytes": 4813258}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 2, "entries": 19728, "seconds": 0.10147899994626641, "file_bytes": 9626347}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 3, "entries": 29592, "seconds": 0.14967433316633105, "file_bytes": 14439436}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 4, "entries": 39456, "seconds": 0.19826508266851306, "file_bytes": 19252525}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 5, "entries": 49320, "seconds": 0.25247337529435754, "file_bytes": 24065614}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 6, "entries": 59184, "seconds": 0.309577124658972, "file_bytes": 28878703}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 7, "entries": 69048, "seconds": 0.3520239577628672, "file_bytes": 33691792}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 8, "entries": 78912, "seconds": 0.3976095407269895, "file_bytes": 38504881}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 9, "entries": 88776, "seconds": 0.44727187510579824, "file_bytes": 43317970}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "full", "query": 10, "entries": 98640, "seconds": 0.5032415832392871, "file_bytes": 48131059}
+{"kind": "summary", "dataset": "reviews", "mode": "full", "queries": 10, "contexts_per_query": 10000, "entries": 98640, "restored_entries": 98640, "total_save_seconds": 2.763256997335702, "finalize_seconds": 0.0, "load_seconds": 0.11423549987375736, "total_file_bytes_written": 264721585, "final_file_bytes": 48131059, "write_amplification": 5.500015800608086, "peak_rss_bytes": 263651328}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 1, "entries": 9864, "seconds": 0.05356379225850105, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 2, "entries": 19728, "seconds": 0.0536808748729527, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 3, "entries": 29592, "seconds": 0.053781125228852034, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 4, "entries": 39456, "seconds": 0.06056620879098773, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 5, "entries": 49320, "seconds": 0.053580041974782944, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 6, "entries": 59184, "seconds": 0.053977041970938444, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 7, "entries": 69048, "seconds": 0.05510404193773866, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 8, "entries": 78912, "seconds": 0.054209332913160324, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 9, "entries": 88776, "seconds": 0.054006332997232676, "file_bytes": 4813235}
+{"kind": "checkpoint", "dataset": "reviews", "mode": "incremental", "query": 10, "entries": 98640, "seconds": 0.054924875032156706, "file_bytes": 4813235}
+{"kind": "summary", "dataset": "reviews", "mode": "incremental", "queries": 10, "contexts_per_query": 10000, "entries": 98640, "restored_entries": 98640, "total_save_seconds": 0.5473936679773033, "finalize_seconds": 0.540952832903713, "load_seconds": 0.109912000130862, "total_file_bytes_written": 96263410, "final_file_bytes": 48131060, "write_amplification": 2.0000268018198644, "peak_rss_bytes": 260620288}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 1, "entries": 1000, "seconds": 0.01266149990260601, "file_bytes": 3946329}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 2, "entries": 2000, "seconds": 0.024897417053580284, "file_bytes": 7892489}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 3, "entries": 3000, "seconds": 0.036119041964411736, "file_bytes": 11838649}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 4, "entries": 4000, "seconds": 0.048027750104665756, "file_bytes": 15784809}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 5, "entries": 5000, "seconds": 0.059920457657426596, "file_bytes": 19730969}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 6, "entries": 6000, "seconds": 0.07189262472093105, "file_bytes": 23677129}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 7, "entries": 7000, "seconds": 0.08329574996605515, "file_bytes": 27623289}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 8, "entries": 8000, "seconds": 0.10354116698727012, "file_bytes": 31569449}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 9, "entries": 9000, "seconds": 0.11286941729485989, "file_bytes": 35515609}
+{"kind": "checkpoint", "dataset": "emails", "mode": "full", "query": 10, "entries": 10000, "seconds": 0.11946329101920128, "file_bytes": 39461769}
+{"kind": "summary", "dataset": "emails", "mode": "full", "queries": 10, "contexts_per_query": 1000, "entries": 10000, "restored_entries": 10000, "total_save_seconds": 0.6726884166710079, "finalize_seconds": 0.0, "load_seconds": 0.05649479106068611, "total_file_bytes_written": 217040490, "final_file_bytes": 39461769, "write_amplification": 5.500019271817236, "peak_rss_bytes": 164364288}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 1, "entries": 1000, "seconds": 0.01305249985307455, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 2, "entries": 2000, "seconds": 0.012799125164747238, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 3, "entries": 3000, "seconds": 0.012481417041271925, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 4, "entries": 4000, "seconds": 0.013389917090535164, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 5, "entries": 5000, "seconds": 0.013505625072866678, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 6, "entries": 6000, "seconds": 0.013006167020648718, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 7, "entries": 7000, "seconds": 0.01319533260539174, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 8, "entries": 8000, "seconds": 0.012960624881088734, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 9, "entries": 9000, "seconds": 0.012739624828100204, "file_bytes": 3946306}
+{"kind": "checkpoint", "dataset": "emails", "mode": "incremental", "query": 10, "entries": 10000, "seconds": 0.01249679084867239, "file_bytes": 3946306}
+{"kind": "summary", "dataset": "emails", "mode": "incremental", "queries": 10, "contexts_per_query": 1000, "entries": 10000, "restored_entries": 10000, "total_save_seconds": 0.12962712440639734, "finalize_seconds": 0.12048375001177192, "load_seconds": 0.05466045904904604, "total_file_bytes_written": 78924830, "final_file_bytes": 39461770, "write_amplification": 2.0000326898666736, "peak_rss_bytes": 164282368}

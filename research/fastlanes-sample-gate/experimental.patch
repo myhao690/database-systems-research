@@ -1,0 +1,202 @@
+diff --git a/src/wizard/wizard.cpp b/src/wizard/wizard.cpp
+index 19cf763..72e9732 100644
+--- a/src/wizard/wizard.cpp
++++ b/src/wizard/wizard.cpp
+@@ -771,14 +771,89 @@ bool IsDictionaryChoosingRequired(const ColumnDescriptorT& column_descriptor) {
+ 	return false;
+ }
+ 
++bool IsFSST12Expression(const OperatorToken token) {
++	switch (token) {
++	case OperatorToken::EXP_FSST12_DICT_STR_U32:
++	case OperatorToken::EXP_FSST12_DICT_STR_U16:
++	case OperatorToken::EXP_FSST12_DICT_STR_U08:
++	case OperatorToken::EXP_FSST12_DICT_STR_FFOR_SLPATCH_U32:
++	case OperatorToken::EXP_FSST12_DICT_STR_FFOR_SLPATCH_U16:
++	case OperatorToken::EXP_FSST12_DICT_STR_FFOR_U08:
++	case OperatorToken::EXP_FSST12_DICT_STR_FFOR_SLPATCH_U08:
++	case OperatorToken::EXP_FSST12_DELTA:
++	case OperatorToken::EXP_FSST12_DELTA_SLPATCH:
++		return true;
++	default:
++		return false;
++	}
++}
++
++bool SkipFSST12ForShortStringSample(const rowgroup_pt& rowgroup,
++                                    const ColumnDescriptorT& column_descriptor,
++                                    const RowgroupDescriptorT& footer,
++                                    const Connection& fls) {
++	// Preserve explicit candidate and sampling choices; keep feature work bounded.
++	if (fls.is_forced_schema_pool() || fls.is_forced_schema() ||
++	    fls.get_sample_size() != CFG::SAMPLER::SAMPLE_SIZE || footer.m_n_vec == 0) {
++		return false;
++	}
++	const auto* column = std::get_if<up<FLSStrColumn>>(&rowgroup[column_descriptor.idx]);
++	if (!column || !*column) {
++		return false;
++	}
++
++	auto sample_size = fls.get_sample_size();
++	if (sample_size == 0 || sample_size > footer.m_n_vec) {
++		sample_size = footer.m_n_vec;
++	}
++	const n_t* vec_idxs;
++	vector<n_t> dyn_layout;
++	if (footer.m_n_vec == 64) {
++		vec_idxs = sampling_layout_64.data();
++	} else if (footer.m_n_vec == 32) {
++		vec_idxs = sampling_layout_32.data();
++	} else if (footer.m_n_vec == 2) {
++		vec_idxs = sampling_layout_2.data();
++	} else if (footer.m_n_vec == 1) {
++		vec_idxs = sampling_layout_1.data();
++	} else {
++		dyn_layout = sampling_layout_dynamic(footer.m_n_vec);
++		vec_idxs = dyn_layout.data();
++	}
++
++	uint64_t length_sum = 0;
++	uint64_t count = 0;
++	for (n_t vec = 0; vec < sample_size; ++vec) {
++		const size_t begin = static_cast<size_t>(vec_idxs[vec]) * CFG::VEC_SZ;
++		const size_t end = std::min<size_t>(begin + CFG::VEC_SZ, (*column)->length_arr.size());
++		for (size_t row = begin; row < end; ++row) {
++			const auto length = (*column)->length_arr[row];
++			if (length != 0) {
++				length_sum += length;
++				++count;
++			}
++		}
++	}
++	// This is a conservative candidate-filtering heuristic, not a size bound.
++	constexpr uint64_t min_avg_length = 16;
++	return count != 0 && length_sum < min_avg_length * count;
++}
++
+ template <typename PT>
+ void TypedDecide(const rowgroup_pt&   rowgroup,
+                  ColumnDescriptorT&   column_descriptor,
+                  RowgroupDescriptorT& footer,
+                  const Connection&    fls) {
++	bool skip_fsst12 = false;
++	if constexpr (std::is_same_v<PT, fls_string_t>) {
++		skip_fsst12 = SkipFSST12ForShortStringSample(rowgroup, column_descriptor, footer, fls);
++	}
+ 
+ 	auto evaluate_expressions = [&](const auto& operator_token_list) {
+ 		for (const auto& expr : operator_token_list) {
++			if (skip_fsst12 && IsFSST12Expression(expr)) {
++				continue;
++			}
+ 			n_t  size = TryExpr(rowgroup, column_descriptor, expr, footer, fls);
+ 			auto res  = std::make_unique<ExpressionResultT>();
+ 
+diff --git a/test/src/unit_tests/CMakeLists.txt b/test/src/unit_tests/CMakeLists.txt
+index 5ee0a5b..260ac53 100644
+--- a/test/src/unit_tests/CMakeLists.txt
++++ b/test/src/unit_tests/CMakeLists.txt
+@@ -10,6 +10,7 @@ add_executable(unit_test
+         parse_timestamp_with_offset_test.cpp
+         parse_timestamp_zulu_test.cpp
+         sampling_layout_test.cpp
++        wizard_sample_gate_test.cpp
+         validitymask.cpp
+ )
+ 
+diff --git a/test/src/unit_tests/wizard_sample_gate_test.cpp b/test/src/unit_tests/wizard_sample_gate_test.cpp
+new file mode 100644
+index 0000000..986f71f
+--- /dev/null
++++ b/test/src/unit_tests/wizard_sample_gate_test.cpp
+@@ -0,0 +1,90 @@
++#include "fastlanes.hpp"
++#include "fls/reader/table_reader.hpp"
++#include "fls/table/table.hpp"
++#include <chrono>
++#include <filesystem>
++#include <fstream>
++#include <gtest/gtest.h>
++#include <random>
++#include <string>
++#include <system_error>
++
++namespace fastlanes { namespace {
++
++struct TempTable {
++	std::filesystem::path root;
++	std::filesystem::path input;
++
++	TempTable() {
++		root =
++		    std::filesystem::temp_directory_path() /
++		    ("fls_wizard_sample_gate_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
++			 "_" + std::to_string(std::random_device {}()));
++		input = root / "input";
++		std::filesystem::create_directories(input);
++	}
++
++	~TempTable() {
++		std::error_code ignored;
++		std::filesystem::remove_all(root, ignored);
++	}
++
++	void Write(bool two_columns) const {
++		std::ofstream schema(input / "schema.json");
++		schema << "{\"table\":\"sample_gate_test\",\"columns\":[{\"name\":\"s\",\"type\":\"VARCHAR\"}";
++		if (two_columns) {
++			schema << ",{\"name\":\"n\",\"type\":\"BIGINT\"}";
++		}
++		schema << "]}";
++		schema.close();
++
++		std::ofstream csv(input / "data.csv");
++		const char*   nullable_values[] = {"x", "NULL", "", "short", "ordinary title here"};
++		const char*   plain_values[]    = {"a", "b", "c"};
++		for (int i = 0; i < 1024; ++i) {
++			csv << (two_columns ? nullable_values[i % 5] : plain_values[i % 3]);
++			if (two_columns) {
++				csv << '|' << i;
++			}
++			csv << '\n';
++		}
++	}
++
++	void CheckRoundTrip(Connection& writer, const std::string& name) const {
++		const auto out = root / name / "data.fls";
++		std::filesystem::create_directories(out.parent_path());
++		writer.read_csv(input).to_fls(out);
++		Connection reader_connection;
++		auto       reader  = reader_connection.read_fls(out);
++		auto       decoded = reader->materialize();
++		const auto equal   = writer.get_table() == *decoded;
++		EXPECT_TRUE(equal.is_equal) << equal.description;
++	}
++};
++
++TEST(WizardSampleGate, ShortStringsNullsAndEmptyStringsRoundTrip) {
++	TempTable data;
++	data.Write(true);
++	Connection writer;
++	data.CheckRoundTrip(writer, "default");
++}
++
++TEST(WizardSampleGate, ExplicitFSST12OnlyPoolIsNotPruned) {
++	TempTable data;
++	data.Write(false);
++	Connection writer;
++	writer.force_schema_pool({OperatorToken::EXP_FSST12_DELTA});
++	data.CheckRoundTrip(writer, "forced");
++}
++
++TEST(WizardSampleGate, NonDefaultSampleSizesRemainValid) {
++	TempTable data;
++	data.Write(false);
++	for (const n_t sample_size : {1UL, 3UL}) {
++		Connection writer;
++		writer.set_sample_size(sample_size);
++		data.CheckRoundTrip(writer, "sample_" + std::to_string(sample_size));
++	}
++}
++
++}} // namespace fastlanes

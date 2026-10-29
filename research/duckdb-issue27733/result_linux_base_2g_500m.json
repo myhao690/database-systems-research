@@ -1,0 +1,41 @@
+{
+  "label": "linux_base_2g_500m",
+  "memory_limit": "500MB",
+  "hard_limit": "2GB",
+  "rc": 1,
+  "seconds": 11.713547464,
+  "cgroup_memory_peak": 2147483648,
+  "sampled_peaks": {
+    "current": 2147483648,
+    "anon": 741560320,
+    "file": 1425092608,
+    "kernel": 31199232
+  },
+  "max_rss_kb": 751228,
+  "events": {
+    "low": "0",
+    "high": "0",
+    "max": "21671",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0",
+    "sock_throttled": "0"
+  },
+  "log_tail": "Out of Memory Error: failed to pin block of size 256.0 KiB (476.6 MiB/476.8 MiB used)\n\nPossible solutions:\n* Reducing the number of threads (SET threads=X)\n* Disabling insertion-order preservation (SET preserve_insertion_order=false)\n* Increasing the memory limit (SET memory_limit='...GB')\n\nSee also https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads\n\u001b[90mWARNING:\n\u001b[00m\u001b[90mUsing \"PRAGMA enable_profiling=...\" to set a setting is deprecated and will be removed in a future release, use \"SET enable_profiling=...\" instead.\n\n\u001b[00m",
+  "profile_system": {
+    "blocked_thread_time": 0.0,
+    "peak_buffer_memory": 0,
+    "peak_streaming_buffer_size": 0,
+    "peak_temp_dir_size": 0,
+    "total_bytes_spilled": 3802202112,
+    "total_memory_allocated": 18420858880
+  },
+  "profile_io": {
+    "total_bytes_read": 357040128,
+    "total_bytes_written": 3802202112,
+    "total_read_operations": 1362,
+    "total_read_time": 1.156882,
+    "total_write_operations": 30944,
+    "total_write_time": 21.51594
+  }
+}

@@ -1,0 +1,2445 @@
+diff --git a/reasondb/backends/simulate_store.py b/reasondb/backends/simulate_store.py
+index 61a80f5..fa1149d 100644
+--- a/reasondb/backends/simulate_store.py
++++ b/reasondb/backends/simulate_store.py
+@@ -1,9 +1,12 @@
+ import hashlib
+ import json
+ import logging
++import os
++import stat
++import tempfile
+ import time
+ from pathlib import Path
+-from typing import Any, Dict, Optional, Sequence, Tuple, Union
++from typing import Any, Dict, Optional, Sequence, Set, Tuple, Union
+ 
+ from reasondb.monitor import collector as _monitor
+ from reasondb.utils.timing import SimulatedClock
+@@ -68,6 +71,13 @@ class SimulateStore:
+         self._operator_configs: Dict[str, Dict[str, Any]] = {}
+         # benchmark → split → filter-stats payload (see record_filter_stats).
+         self._filter_stats: Dict[str, Dict[str, Dict[str, Any]]] = {}
++        self._dirty_text_qa: Dict[str, Set[str]] = {}
++        self._dirty_vision: Dict[str, Set[str]] = {}
++        self._dirty_precomputed_ops: Set[str] = set()
++        self._dirty_operator_configs: Set[str] = set()
++        self._dirty_filter_stats: Dict[str, Set[str]] = {}
++        # The last delta included in a full export (or loaded during resume).
++        self._checkpoint_seq = 0
+ 
+     @staticmethod
+     def _hash(text: str) -> str:
+@@ -99,6 +109,7 @@ class SimulateStore:
+             "materialized_compression_ratio": materialized_compression_ratio,
+             "vanilla": vanilla,
+         }
++        self._dirty_text_qa.setdefault(model_id, set()).add(key)
+ 
+     def lookup_text_qa(
+         self, model_id: str, question: str, context: str
+@@ -146,6 +157,7 @@ class SimulateStore:
+             "materialized_compression_ratio": materialized_compression_ratio,
+             "vanilla": vanilla,
+         }
++        self._dirty_vision.setdefault(model_id, set()).add(key)
+ 
+     def lookup_vision(
+         self, model_id: str, question: str, image_path: str
+@@ -170,7 +182,9 @@ class SimulateStore:
+         return self._operator_configs.get(key)
+ 
+     def record_operator_config(self, key: str, values: Dict[str, Any]) -> None:
+-        self._operator_configs.setdefault(key, values)
++        if key not in self._operator_configs:
++            self._operator_configs[key] = values
++            self._dirty_operator_configs.add(key)
+ 
+     # ── Filter stats ─────────────────────────────────────────────────────────
+ 
+@@ -193,35 +207,149 @@ class SimulateStore:
+         able to correct a matrix it wrote before dying part-way.
+         """
+         self._filter_stats.setdefault(benchmark, {})[split] = payload
++        self._dirty_filter_stats.setdefault(benchmark, set()).add(split)
+ 
+     def get_filter_stats(self, benchmark: str, split: str) -> Optional[Dict[str, Any]]:
+         return self._filter_stats.get(benchmark, {}).get(split)
+ 
+     # ── Serialisation ────────────────────────────────────────────────────────
+ 
++    def _payload(self) -> Dict[str, Any]:
++        return {
++            "text_qa": self._text_qa,
++            "vision": self._vision,
++            "precomputed_ops": list(self._precomputed_ops),
++            "operator_configs": self._operator_configs,
++            "filter_stats": self._filter_stats,
++            "checkpoint_seq": self._checkpoint_seq,
++        }
++
++    @staticmethod
++    def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
++        """A failed process write must not truncate the last good checkpoint."""
++        path.parent.mkdir(parents=True, exist_ok=True)
++        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
++        try:
++            with os.fdopen(fd, "w") as stream:
++                json.dump(payload, stream, indent=2)
++                stream.flush()
++                os.fsync(stream.fileno())
++            if path.exists():
++                os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
++            os.replace(temporary, path)
++        finally:
++            Path(temporary).unlink(missing_ok=True)
++
++    def _delta_payload(self) -> Dict[str, Any]:
++        return {
++            "text_qa": {
++                model: {key: self._text_qa[model][key] for key in keys}
++                for model, keys in self._dirty_text_qa.items()
++            },
++            "vision": {
++                model: {key: self._vision[model][key] for key in keys}
++                for model, keys in self._dirty_vision.items()
++            },
++            "precomputed_ops": list(self._dirty_precomputed_ops),
++            "operator_configs": {
++                key: self._operator_configs[key] for key in self._dirty_operator_configs
++            },
++            "filter_stats": {
++                benchmark: {
++                    split: self._filter_stats[benchmark][split] for split in splits
++                }
++                for benchmark, splits in self._dirty_filter_stats.items()
++            },
++        }
++
++    def _clear_dirty(self) -> None:
++        self._dirty_text_qa.clear()
++        self._dirty_vision.clear()
++        self._dirty_precomputed_ops.clear()
++        self._dirty_operator_configs.clear()
++        self._dirty_filter_stats.clear()
++
++    @staticmethod
++    def _checkpoint_dir(path: Path) -> Path:
++        return path.with_name(path.name + ".checkpoints")
++
++    def checkpoint_delta(self, path: Path) -> Optional[Path]:
++        """Commit only changes since the previous checkpoint; no-op if unchanged.
++
++        One precompute job is the sole writer to its recording path. A failed
++        write leaves the dirty set intact, so the next attempt can retry it.
++        """
++        payload = self._delta_payload()
++        if not any(payload.values()):
++            return None
++        directory = self._checkpoint_dir(Path(path))
++        directory.mkdir(parents=True, exist_ok=True)
++        previous = [
++            int(p.stem.split("-")[-1]) for p in directory.glob("checkpoint-*.json")
++        ]
++        sequence = max(max(previous, default=0), self._checkpoint_seq) + 1
++        checkpoint = directory / f"checkpoint-{sequence:08d}.json"
++        started = time.perf_counter()
++        self._write_json_atomic(checkpoint, payload)
++        self._checkpoint_seq = sequence
++        self._clear_dirty()
++        if _monitor.is_enabled():
++            _monitor.record_precompute_save(
++                path=str(checkpoint),
++                seconds=time.perf_counter() - started,
++                size_bytes=checkpoint.stat().st_size,
++                kind="delta",
++            )
++        return checkpoint
++
++    @classmethod
++    def load_incremental(cls, path: Path) -> "SimulateStore":
++        """Resume a precompute pass from its full export and committed deltas."""
++        path = Path(path)
++        store = cls.load(path) if path.is_file() else cls()
++        directory = cls._checkpoint_dir(path)
++        for checkpoint in sorted(directory.glob("checkpoint-*.json")):
++            sequence = int(checkpoint.stem.split("-")[-1])
++            if sequence <= store._checkpoint_seq:
++                continue  # Final export committed before sidecar cleanup.
++            with checkpoint.open() as stream:
++                delta = json.load(stream)
++            for attr, section in (("_text_qa", "text_qa"), ("_vision", "vision")):
++                target = getattr(store, attr)
++                for model, records in delta.get(section, {}).items():
++                    target.setdefault(model, {}).update(records)
++            store._precomputed_ops.update(delta.get("precomputed_ops", []))
++            for key, config in delta.get("operator_configs", {}).items():
++                old = store._operator_configs.setdefault(key, config)
++                if old != config:
++                    raise ValueError(f"Conflicting checkpoint operator config: {key}")
++            for benchmark, by_split in delta.get("filter_stats", {}).items():
++                store._filter_stats.setdefault(benchmark, {}).update(by_split)
++            store._checkpoint_seq = sequence
++        return store
++
++    def finalize_checkpoints(self, path: Path) -> None:
++        """Export the legacy JSON only after a complete run; then discard deltas."""
++        path = Path(path)
++        self.save(path)
++        directory = self._checkpoint_dir(path)
++        for checkpoint in directory.glob("checkpoint-*.json"):
++            checkpoint.unlink()
++        if directory.is_dir() and not any(directory.iterdir()):
++            directory.rmdir()
++
+     def save(self, path: Path) -> None:
+         path = Path(path)
+         path.parent.mkdir(parents=True, exist_ok=True)
+         started = time.perf_counter()
+-        with open(path, "w") as f:
+-            json.dump(
+-                {
+-                    "text_qa": self._text_qa,
+-                    "vision": self._vision,
+-                    "precomputed_ops": list(self._precomputed_ops),
+-                    "operator_configs": self._operator_configs,
+-                    "filter_stats": self._filter_stats,
+-                },
+-                f,
+-                indent=2,
+-            )
++        self._write_json_atomic(path, self._payload())
++        self._clear_dirty()
+         if _monitor.is_enabled():
+-            # The whole store is re-serialized after every precomputed query; for a
+-            # multi-GB store this dwarfs everything else in the loop, so it is measured.
+             _monitor.record_precompute_save(
+                 path=str(path),
+                 seconds=time.perf_counter() - started,
+                 size_bytes=path.stat().st_size,
++                kind="full",
+             )
+ 
+     @staticmethod
+@@ -234,11 +362,7 @@ class SimulateStore:
+         *single* dataset (see ``scripts/merge_precompute.py``), where two processes record
+         disjoint halves of the same benchmark and their files have to come back together.
+         """
+-        paths = (
+-            [path]
+-            if isinstance(path, (str, Path))
+-            else [p for p in path]
+-        )
++        paths = [path] if isinstance(path, (str, Path)) else [p for p in path]
+         assert paths, "SimulateStore.load needs at least one path."
+         store = SimulateStore()
+         for one in paths:
+@@ -262,6 +386,8 @@ class SimulateStore:
+         with open(path, "r") as f:
+             data = json.load(f)
+ 
++        self._checkpoint_seq = max(self._checkpoint_seq, data.get("checkpoint_seq", 0))
++
+         for attr, key in (("_text_qa", "text_qa"), ("_vision", "vision")):
+             target: Dict[str, Dict[str, dict]] = getattr(self, attr)
+             for model_id, records in (data.get(key) or {}).items():
+@@ -307,7 +433,9 @@ class SimulateStore:
+         return key in self._precomputed_ops
+ 
+     def mark_op_precomputed(self, key: str) -> None:
+-        self._precomputed_ops.add(key)
++        if key not in self._precomputed_ops:
++            self._precomputed_ops.add(key)
++            self._dirty_precomputed_ops.add(key)
+ 
+     def counts(self) -> Dict[str, int]:
+         return {
+diff --git a/reasondb/evaluation/precompute.py b/reasondb/evaluation/precompute.py
+index 8755450..9c96428 100644
+--- a/reasondb/evaluation/precompute.py
++++ b/reasondb/evaluation/precompute.py
+@@ -2,14 +2,15 @@
+ 
+ The shared precompute loop: create-or-resume a
+ :class:`~reasondb.backends.simulate_store.SimulateStore`, install it as the
+-process's precompute sink, run the perfect plan over every query, and save after each
+-one. Executor construction stays at the call site, because it differs per experiment:
++process's precompute sink, run the perfect plan over every query, and checkpoint
++new responses after each one. Executor construction stays at the call site, because it differs per experiment:
+ the storage sweep needs a configurator covering every baseline it will ever request,
+ the sample-size sweep the plain default suite.
+ 
+ The pass needs the model servers running - recording real responses is the entire
+ point - and it is resumable: the store is saved after every query, so a crashed
+-run reloads what it had and skips the operators already covered.
++run reloads what it had and skips the operators already covered. A completed
++pass exports the original single-file JSON format for simulation consumers.
+ 
+ It reports progress through two kinds of events: ``precompute_progress`` drives the
+ monitor's Precompute tab (store growth, save cost), and ``query_start``/``query_end``
+@@ -46,8 +47,9 @@ PRECOMPUTE_ROLE = "precompute"
+ 
+ def load_or_create_store(output_path: Path) -> SimulateStore:
+     """The store this pass appends to, resuming from its own partial file if present."""
+-    if output_path.exists():
+-        store = SimulateStore.load(output_path)
++    checkpoint_dir = SimulateStore._checkpoint_dir(output_path)
++    if output_path.exists() or checkpoint_dir.exists():
++        store = SimulateStore.load_incremental(output_path)
+         logger.info("[precompute] Resuming from %s (%s)", output_path, store.stats())
+         return store
+     output_path.parent.mkdir(parents=True, exist_ok=True)
+@@ -89,7 +91,7 @@ def run_precompute(
+                 )
+                 before = store.counts()
+                 e.precompute_query(query, i)
+-                store.save(output_path)
++                store.checkpoint_delta(output_path)
+                 counts = store.counts()
+                 monitor.record_precompute_progress(
+                     executor=progress_label,
+@@ -117,9 +119,8 @@ def run_precompute(
+                     len(queries),
+                     store.stats(),
+                 )
++            store.finalize_checkpoints(output_path)
+     finally:
+         SimulateStore.set_precompute(None)
+-    logger.info(
+-        "[%s] Done. Saved %s to %s", progress_label, store.stats(), output_path
+-    )
++    logger.info("[%s] Done. Saved %s to %s", progress_label, store.stats(), output_path)
+     return store
+diff --git a/reasondb/evaluation/precompute_merge.py b/reasondb/evaluation/precompute_merge.py
+index 0248817..11304d6 100644
+--- a/reasondb/evaluation/precompute_merge.py
++++ b/reasondb/evaluation/precompute_merge.py
+@@ -1,8 +1,8 @@
+ """Merge ``--precompute`` JSON files recorded by separate processes into one.
+ 
+-``SimulateStore.save`` rewrites its whole file after *every* query, so two
+-processes writing the same path race and silently lose entries - there is no
+-locking. Anything that precomputes in parallel therefore gives each writer its own
++Per-query checkpoints are single-writer: two processes writing the same path
++race and silently lose entries because there is no locking. Anything that
++precomputes in parallel therefore gives each writer its own
+ file and merges afterwards: one process per modality on separate servers (see
+ ``REASONDB_PRECOMPUTE_SKIP_MODALITIES`` in
+ :mod:`reasondb.utils.precompute_modalities`), or one coordinator job per shard of
+diff --git a/reasondb/monitor/events.py b/reasondb/monitor/events.py
+index c070bd1..3ecff3a 100644
+--- a/reasondb/monitor/events.py
++++ b/reasondb/monitor/events.py
+@@ -91,7 +91,7 @@ nothing and a missing one renders as blank in the UI rather than breaking a run)
+                         succeeding solves are counted equally.
+ ``kv_inference``        the full ``reasondb.backends.inference_stats`` payload
+ ``precompute_progress`` query_index, n_queries, n_text_qa, n_vision, n_ops, n_configs
+-``precompute_save``     path, seconds, size_bytes
++``precompute_save``     path, seconds, size_bytes, kind (delta or full)
+ ``job_spec``            job_id, spec
+ ``error``               where, message
+ """
+diff --git a/reasondb/monitor/static/tabs/events.js b/reasondb/monitor/static/tabs/events.js
+index be9e7ff..ccfc586 100644
+--- a/reasondb/monitor/static/tabs/events.js
++++ b/reasondb/monitor/static/tabs/events.js
+@@ -140,7 +140,7 @@ export function summarize(event) {
+     case "precompute_progress":
+       return `#${d.query_index} · ${Format.int(d.n_text_qa)} text / ${Format.int(d.n_vision)} vision`;
+     case "precompute_save":
+-      return `${Format.bytes(d.size_bytes)} in ${Format.seconds(d.seconds)}`;
++      return `${d.kind ?? "store"} · ${Format.bytes(d.size_bytes)} in ${Format.seconds(d.seconds)}`;
+     case "error":
+       return `${d.where}: ${d.message}`;
+     default:
+diff --git a/reasondb/monitor/static/tabs/precompute.js b/reasondb/monitor/static/tabs/precompute.js
+index 4df6135..66c429f 100644
+--- a/reasondb/monitor/static/tabs/precompute.js
++++ b/reasondb/monitor/static/tabs/precompute.js
+@@ -1,9 +1,4 @@
+-/* Precompute tab: how the simulate store is growing, and what maintaining it costs.
+- *
+- * The expensive detail here is not store size but re-serialization: SimulateStore.save()
+- * rewrites the entire JSON after every query, so the cost grows with the store and can
+- * quietly come to dominate a precompute run. That is the chart to watch.
+- */
++/* Precompute tab: how the simulate store is growing, and what maintaining it costs. */
+ 
+ import { Format, lineChart, table } from "/static/charts.js";
+ import { chartCard, grid, notice, panel, tiles } from "/static/ui.js";
+@@ -31,7 +26,7 @@ export function renderPrecompute(view, rerender) {
+       view,
+       "No precompute activity in this run. Start one with " +
+         "`python scripts/run_coordinator.py --producer run_benchmark --precompute <out.json> ...` to see store growth " +
+-        "and, more usefully, what re-serializing the store costs after every query.",
++        "and the cost of writing its checkpoints.",
+     );
+     if (run?.precompute && Object.keys(run.precompute).length) {
+       notice(view, JSON.stringify(run.precompute), "");
+@@ -83,16 +78,16 @@ export function renderPrecompute(view, rerender) {
+ 
+   chartCard(g, {
+     id: "save-cost",
+-    title: "Cost of re-serializing the store",
+-    sub: "SimulateStore.save() runs after every query and rewrites the whole JSON. This is what that costs, and why it grows.",
++    title: "Store checkpoint cost",
++    sub: "Per-query delta writes and the final full JSON export; file size is bytes written by that operation.",
+     render: (host, height) =>
+       lineChart(host, {
+         height,
+         series: [
+-          { key: "seconds", label: "Seconds per save", points: saves.map((s, i) => ({ x: i, y: s.seconds })) },
++          { key: "seconds", label: "Seconds per write", points: saves.map((s, i) => ({ x: i, y: s.seconds })) },
+         ],
+         hidden: hiddenSet("save-cost"),
+-        xFormat: (v) => `save ${Math.round(v) + 1}`,
++        xFormat: (v) => `write ${Math.round(v) + 1}`,
+         yFormat: Format.seconds,
+         yTitle: "Serialization time",
+         emptyMessage: "No store writes recorded yet.",
+@@ -102,7 +97,8 @@ export function renderPrecompute(view, rerender) {
+       columns: [
+         { key: "t", label: "At", format: Format.clock },
+         { key: "seconds", label: "Seconds", format: Format.seconds },
+-        { key: "size_bytes", label: "File size", format: Format.bytes },
++        { key: "kind", label: "Kind" },
++        { key: "size_bytes", label: "Bytes written", format: Format.bytes },
+         { key: "path", label: "Path", wrap: true },
+       ],
+       rows: saves,
+diff --git a/reasondb/reasoning/embeddings.py b/reasondb/reasoning/embeddings.py
+index 5352467..995b8b5 100644
+--- a/reasondb/reasoning/embeddings.py
++++ b/reasondb/reasoning/embeddings.py
+@@ -1,4 +1,7 @@
+ import os
++import asyncio
++import weakref
++import warnings
+ from abc import abstractmethod
+ from dataclasses import dataclass
+ import hashlib
+@@ -8,7 +11,7 @@ from typing import Optional
+ from openai import AsyncOpenAI
+ import numpy as np
+ 
+-from reasondb.utils.cache import CACHE_DIR
++from reasondb.utils.cache import CACHE_DIR, write_json_atomic
+ from reasondb.utils.logging import FileLogger
+ 
+ 
+@@ -37,37 +40,65 @@ class EmbeddingModel:
+ 
+ 
+ class TextEmbeddingModel(EmbeddingModel):
++    def __init__(self, model_id, characteristics: EmbeddingCharacteristics):
++        super().__init__(model_id, characteristics)
++        self._cache_locks = weakref.WeakValueDictionary()
++
++    def _cache_key(self, text: str) -> str:
++        identity = json.dumps(
++            {
++                "model_id": self.model_id,
++                "in_len": self.characteristics.in_len,
++                "text": self._effective_input(text),
++            },
++            sort_keys=True,
++            separators=(",", ":"),
++        )
++        return "v2-" + hashlib.sha256(identity.encode()).hexdigest()
++
++    def _effective_input(self, text: str) -> str:
++        return text
++
+     async def embed(self, text: str, logger: FileLogger) -> np.ndarray:
+         logger.debug(__name__, f"Invoking Embedding Model with prompt: {text}")
+-        response = None
+-        response: Optional[np.ndarray] = self.get_cached(text)
+-        if response is None:
+-            logger.debug(__name__, "Invoking EmbeddingModel")
+-            response = await self._embed(text)
+-            self.cache(text, response)
+-        else:
+-            logger.debug(__name__, "Using cached embedding")
++        key = self._cache_key(text)
++        lock = self._cache_locks.setdefault(key, asyncio.Lock())
++        async with lock:
++            response: Optional[np.ndarray] = self.get_cached(text)
++            if response is None:
++                logger.debug(__name__, "Invoking EmbeddingModel")
++                response = await self._embed(text)
++                self.cache(text, response)
++            else:
++                logger.debug(__name__, "Using cached embedding")
+         logger.debug(__name__, f"LLM response: {response}")
+         return response
+ 
+     def cache(self, prompt: str, response: np.ndarray):
+-        hash = hashlib.sha256(str(prompt).encode()).hexdigest()
+-        EMBEDDING_CACHE_DIR.mkdir(exist_ok=True)
+-        path = EMBEDDING_CACHE_DIR / hash
+-        with open(path, "w") as f:
+-            json.dump({"prompt": str(prompt), "response": response.tolist()}, f)
++        EMBEDDING_CACHE_DIR.mkdir(exist_ok=True, parents=True)
++        path = EMBEDDING_CACHE_DIR / self._cache_key(prompt)
++        write_json_atomic(
++            path,
++            {
++                "prompt": str(prompt),
++                "effective_input": self._effective_input(prompt),
++                "response": response.tolist(),
++            },
++        )
+ 
+     def get_cached(self, prompt: str) -> Optional[np.ndarray]:
+-        hash = hashlib.sha256(str(prompt).encode()).hexdigest()
+-        path = EMBEDDING_CACHE_DIR / hash
++        path = EMBEDDING_CACHE_DIR / self._cache_key(prompt)
+         if not path.exists():
+             return None
+-        with open(path, "r") as f:
+-            try:
++        try:
++            with open(path, "r") as f:
+                 data = json.load(f)
+-            except json.JSONDecodeError:
+-                return None
+-        if data["prompt"] == str(prompt):
++        except FileNotFoundError:
++            return None
++        except json.JSONDecodeError:
++            warnings.warn(f"Corrupt embedding cache entry: {path}", RuntimeWarning)
++            return None
++        if data.get("effective_input") == self._effective_input(prompt):
+             return np.array(data["response"])
+ 
+     @abstractmethod
+@@ -93,11 +124,14 @@ class OpenAIEmbeddingModel(TextEmbeddingModel):
+     async def _embed(self, text: str) -> np.ndarray:
+         assert self.client is not None, "OpenAI client not initialized"
+         response = await self.client.embeddings.create(
+-            input=text[: self.characteristics.in_len], model=self.model_id
++            input=self._effective_input(text), model=self.model_id
+         )
+         assert response.data[0].embedding is not None
+         return np.array(response.data[0].embedding)
+ 
++    def _effective_input(self, text: str) -> str:
++        return text[: self.characteristics.in_len]
++
+ 
+ class TextEmbedding3Small(OpenAIEmbeddingModel):
+     def __init__(self):
+diff --git a/reasondb/reasoning/llm.py b/reasondb/reasoning/llm.py
+index 1992ba5..ec48fda 100644
+--- a/reasondb/reasoning/llm.py
++++ b/reasondb/reasoning/llm.py
+@@ -9,12 +9,13 @@ from pathlib import Path
+ import textwrap
+ from abc import ABC, abstractmethod
+ from dataclasses import dataclass
+-from typing import List, Literal, Optional, Tuple
++from typing import List, Literal, Optional, Sequence, Tuple
+ from openai import NOT_GIVEN, AsyncOpenAI
+ 
+ import hashlib
++import weakref
+ 
+-from reasondb.utils.cache import CACHE_DIR
++from reasondb.utils.cache import CACHE_DIR, write_json_atomic
+ from reasondb.utils.logging import FileLogger
+ from reasondb.utils.timing import SimulatedClock
+ 
+@@ -46,10 +47,12 @@ class LargeLanguageModel(ABC):
+         self.num_concurrent = num_concurrent
+         self.semaphore = None
+         self.cache_semaphore = None
++        self._cache_locks = weakref.WeakValueDictionary()
+ 
+     async def prepare(self):
+         self.semaphore = asyncio.Semaphore(self.num_concurrent)
+         self.cache_semaphore = asyncio.Semaphore(self.num_concurrent)
++        self._cache_locks = weakref.WeakValueDictionary()
+ 
+     async def close(self):
+         pass
+@@ -58,30 +61,40 @@ class LargeLanguageModel(ABC):
+         self,
+         prompt: "Prompt",
+         logger: FileLogger,
+-        stop: List[str] = [],
++        stop: Optional[List[str]] = None,
+     ) -> Tuple[str, float, float]:
+-        logger.debug(__name__, f"Invoking LLM with prompt: {prompt}")
+-        response = None
+-        cached = None
++        # Freeze image bytes only when caching: the cache identity must describe
++        # the payload sent even if the source file changes during the call.
+         if self.cache_enabled:
+-            assert self.cache_semaphore is not None, "Prepare LLM first"
+-            async with self.cache_semaphore:
+-                cached = self.get_cached(prompt)
+-        if cached is None:
+-            logger.debug(__name__, "Invoking LLM")
+-            assert self.semaphore is not None, "Prepare LLM first"
+-            assert self.cache_semaphore is not None, "Prepare LLM first"
++            prompt = prompt.snapshot()
++        stop_values = tuple(stop or ())
++        logger.debug(__name__, f"Invoking LLM with prompt: {prompt}")
++        assert self.semaphore is not None, "Prepare LLM first"
++        if not self.cache_enabled:
+             async with self.semaphore:
+-                response, runtime, cost = await self._invoke(prompt, stop=stop)
+-            async with self.cache_semaphore:
+-                self.cache(prompt, response, runtime, cost)
++                response, runtime, cost = await self._invoke(
++                    prompt, stop=list(stop_values)
++                )
+         else:
+-            response, runtime, cost = cached
+-            logger.debug(__name__, "Using cached response")
+-            # A cached response costs ~no wall-clock, so credit the stored runtime to
+-            # the SimulatedClock to keep phase timings comparable to uncached runs
+-            # (see utils/timing.py). Fresh API calls are measured by wall-clock.
+-            SimulatedClock.add(runtime)
++            assert self.cache_semaphore is not None, "Prepare LLM first"
++            key = self._cache_key(prompt, stop_values)
++            lock = self._cache_locks.setdefault(key, asyncio.Lock())
++            async with lock:
++                async with self.cache_semaphore:
++                    cached = self.get_cached(prompt, stop_values)
++                if cached is None:
++                    logger.debug(__name__, "Invoking LLM")
++                    async with self.semaphore:
++                        response, runtime, cost = await self._invoke(
++                            prompt, stop=list(stop_values)
++                        )
++                    async with self.cache_semaphore:
++                        self.cache(prompt, response, runtime, cost, stop_values)
++                else:
++                    response, runtime, cost = cached
++                    logger.debug(__name__, "Using cached response")
++                    # Cached work is credited only to simulated phase timing.
++                    SimulatedClock.add(runtime)
+         logger.debug(__name__, f"LLM response: {response}")
+         return response, runtime, cost
+ 
+@@ -89,39 +102,70 @@ class LargeLanguageModel(ABC):
+         self,
+         prompt: "Prompt",
+         logger: FileLogger,
+-        stop: List[str] = [],
++        stop: Optional[List[str]] = None,
+     ) -> str:
+         return (await self.invoke_with_runtime_and_cost(prompt, logger, stop))[0]
+ 
+-    def cache(self, prompt: "Prompt", response: str, runtime: float, cost: float):
+-        hash = prompt.sha256()
+-        LLM_CACHE_DIR.mkdir(exist_ok=True)
+-        path = LLM_CACHE_DIR / hash
+-        with open(path, "w") as f:
+-            json.dump(
+-                {
+-                    "prompt": str(prompt),
+-                    "response": response,
+-                    "temperature": prompt.temperature,
+-                    "seed": prompt.seed,
+-                    "runtime": runtime,
+-                    "cost": cost,
+-                },
+-                f,
+-            )
++    def _cache_key(self, prompt: "Prompt", stop: Sequence[str]) -> str:
++        identity = json.dumps(
++            {
++                "model_id": self.model_id,
++                "prompt": prompt.sha256(),
++                "stop": stop,
++                "in_cost": self.characteristics.in_cost,
++                "out_cost": self.characteristics.out_cost,
++            },
++            sort_keys=True,
++            separators=(",", ":"),
++        )
++        return "v2-" + hashlib.sha256(identity.encode()).hexdigest()
+ 
+-    def get_cached(self, prompt: "Prompt") -> Optional[Tuple[str, float, float]]:
+-        hash = prompt.sha256()
+-        path = LLM_CACHE_DIR / hash
++    def cache(
++        self,
++        prompt: "Prompt",
++        response: str,
++        runtime: float,
++        cost: float,
++        stop: Sequence[str] = (),
++    ):
++        LLM_CACHE_DIR.mkdir(exist_ok=True, parents=True)
++        path = LLM_CACHE_DIR / self._cache_key(prompt, stop)
++        write_json_atomic(
++            path,
++            {
++                "prompt": str(prompt),
++                "prompt_sha256": prompt.sha256(),
++                "model_id": self.model_id,
++                "stop": list(stop),
++                "response": response,
++                "temperature": prompt.temperature,
++                "seed": prompt.seed,
++                "runtime": runtime,
++                "cost": cost,
++            },
++        )
++
++    def get_cached(
++        self, prompt: "Prompt", stop: Sequence[str] = ()
++    ) -> Optional[Tuple[str, float, float]]:
++        path = LLM_CACHE_DIR / self._cache_key(prompt, stop)
+         if not path.exists():
+             return None
+-        with open(path, "r") as f:
+-            data = json.load(f)
++        try:
++            with open(path, "r") as f:
++                data = json.load(f)
++        except FileNotFoundError:
++            return None
++        except json.JSONDecodeError as error:
++            raise RuntimeError(f"Corrupt LLM cache entry: {path}") from error
+         if (
+-            data["prompt"] == str(prompt)
+-            and data["temperature"] == prompt.temperature
+-            and data["seed"] == prompt.seed
++            data.get("prompt_sha256") == prompt.sha256()
++            and data.get("model_id") == self.model_id
++            and data.get("stop") == list(stop)
++            and data.get("temperature") == prompt.temperature
++            and data.get("seed") == prompt.seed
+             and "runtime" in data
++            and "cost" in data
+         ):
+             return data["response"], data["runtime"], data["cost"]
+ 
+@@ -213,6 +257,9 @@ class Prompt:
+         self._messages = messages
+         self.temperature = temperature
+         self.seed = seed
++        self._image_bytes: Optional[List[Optional[bytes]]] = None
++        self._image_digests: Optional[List[Optional[str]]] = None
++        self._image_urls: Optional[List[Optional[str]]] = None
+ 
+         if self.temperature > 0 and self.seed is None:
+             raise ValueError("Seed must be provided when temperature > 0")
+@@ -227,14 +274,28 @@ class Prompt:
+             seed=self.seed,
+         )
+ 
+-    def encode_image(self, image_path: Path):
++    def snapshot(self) -> "Prompt":
++        frozen = Prompt(list(self._messages), self.temperature, self.seed)
++        frozen._image_bytes = [
++            message.image.read_bytes() if message.image is not None else None
++            for message in frozen._messages
++        ]
++        frozen._image_digests = [
++            hashlib.sha256(data).hexdigest() if data is not None else None
++            for data in frozen._image_bytes
++        ]
++        frozen._image_urls = [None] * len(frozen._messages)
++        return frozen
++
++    def encode_image(self, image_path: Path, image_bytes: Optional[bytes] = None):
+         # need to resize it in case it is too large
+         import io
+         from PIL import Image
+ 
+         Image.MAX_IMAGE_PIXELS = 250000000
+ 
+-        with Image.open(image_path) as image:
++        source = io.BytesIO(image_bytes) if image_bytes is not None else image_path
++        with Image.open(source) as image:
+             max_size = (1024, 1024)
+ 
+             if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
+@@ -253,8 +314,19 @@ class Prompt:
+     @property
+     def prompt_messages(self):  # -> List[ChatCompletionMessageParam]:
+         result = []
+-        for message in self._messages:
++        for index, message in enumerate(self._messages):
+             if message.image is not None:
++                if self._image_urls is None:
++                    image_url = self.encode_image(message.image)
++                else:
++                    image_url = self._image_urls[index]
++                    if image_url is None:
++                        assert self._image_bytes is not None
++                        image_url = self.encode_image(
++                            message.image, self._image_bytes[index]
++                        )
++                        self._image_urls[index] = image_url
++                        self._image_bytes[index] = None
+                 result.append(
+                     {
+                         "role": message.role,
+@@ -263,7 +335,7 @@ class Prompt:
+                             {
+                                 "type": "image_url",
+                                 "image_url": {
+-                                    "url": f"data:image/jpeg;base64,{self.encode_image(message.image)}"
++                                    "url": f"data:image/jpeg;base64,{image_url}"
+                                 },
+                             },
+                         ],
+@@ -282,9 +354,26 @@ class Prompt:
+         return "\n".join(str(message) for message in self._messages)
+ 
+     def sha256(self) -> str:
+-        return hashlib.sha256(
+-            f"{self}-{self.temperature}-{self.seed}".encode()
+-        ).hexdigest()
++        messages = [
++            {
++                "role": message.role,
++                "text": message.only_text,
++                "image": (
++                    self._image_digests[index]
++                    if self._image_digests is not None
++                    else hashlib.sha256(message.image.read_bytes()).hexdigest()
++                    if message.image is not None
++                    else None
++                ),
++            }
++            for index, message in enumerate(self._messages)
++        ]
++        identity = json.dumps(
++            {"messages": messages, "temperature": self.temperature, "seed": self.seed},
++            sort_keys=True,
++            separators=(",", ":"),
++        )
++        return hashlib.sha256(identity.encode()).hexdigest()
+ 
+ 
+ class OpenAILLM(LargeLanguageModel):
+diff --git a/reasondb/utils/cache.py b/reasondb/utils/cache.py
+index b60865e..39ebf0f 100644
+--- a/reasondb/utils/cache.py
++++ b/reasondb/utils/cache.py
+@@ -1,4 +1,24 @@
+ import os
++import json
++import secrets
++import stat
+ from pathlib import Path
+ 
+-CACHE_DIR = Path(os.environ.get("REASONDB_CACHE_DIR", Path.home() / ".reasondb" / "cache"))
++CACHE_DIR = Path(
++    os.environ.get("REASONDB_CACHE_DIR", Path.home() / ".reasondb" / "cache")
++)
++
++
++def write_json_atomic(path: Path, value: object) -> None:
++    """Publish a complete cache entry; readers never observe a partial JSON write."""
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(f".{path.name}.{secrets.token_hex(16)}.tmp")
++    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
++    try:
++        with os.fdopen(fd, "w") as stream:
++            json.dump(value, stream)
++        if path.exists():
++            os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
++        os.replace(temporary, path)
++    finally:
++        temporary.unlink(missing_ok=True)
+diff --git a/scripts/merge_precompute.py b/scripts/merge_precompute.py
+index bd42db1..ea434ab 100644
+--- a/scripts/merge_precompute.py
++++ b/scripts/merge_precompute.py
+@@ -1,7 +1,7 @@
+ """Merge ``--precompute`` JSON files recorded by separate processes into one.
+ 
+-Motivation: ``--precompute`` writes a single output file, and ``SimulateStore.save``
+-does a full rewrite of it after *every* query (see ``Executor._precompute_pipeline``).
++Motivation: ``--precompute`` publishes a single output file after a completed
++pass, with per-query checkpoints while it runs (see ``evaluation.precompute``).
+ Two processes writing to the same path concurrently will race and silently lose
+ entries - there is no locking or atomic merge. To speed up precomputing a
+ mixed-modality benchmark (e.g. ecommerce, which needs a text *and* an image KV cache
+diff --git a/tests/test_ai_cache_identity.py b/tests/test_ai_cache_identity.py
+new file mode 100644
+index 0000000..b34e950
+--- /dev/null
++++ b/tests/test_ai_cache_identity.py
+@@ -0,0 +1,439 @@
++"""Regression tests for the identity of cached AI operator results."""
++
++import asyncio
++import base64
++import hashlib
++import io
++import json
++import stat
++
++import numpy as np
++import pytest
++from PIL import Image
++
++from reasondb.reasoning import embeddings, llm
++
++
++class _Logger:
++    def debug(self, *_args):
++        pass
++
++
++class _LLM(llm.LargeLanguageModel):
++    def __init__(self, model_id):
++        super().__init__(
++            model_id,
++            llm.LLMCharacteristics(1, 1, 1, 1, 0, 0),
++            cache_enabled=True,
++        )
++        self.calls = 0
++
++    async def _invoke(self, prompt, stop=[]):
++        self.calls += 1
++        return f"{self.model_id}:{','.join(stop)}:{self.calls}", 0.1, 0.0
++
++
++class _Embedding(embeddings.TextEmbeddingModel):
++    def __init__(self, model_id, in_len):
++        super().__init__(
++            model_id, embeddings.EmbeddingCharacteristics(1, 1, 1, in_len, 0)
++        )
++        self.calls = 0
++
++    async def _embed(self, text):
++        self.calls += 1
++        return np.array(
++            [float(self.calls), float(len(text[: self.characteristics.in_len]))]
++        )
++
++
++def _prompt(image=None):
++    return llm.Prompt([llm.Message("classify this", "user", image=image)])
++
++
++def test_llm_cache_separates_model_and_stop(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    first, second = _LLM("model-a"), _LLM("model-b")
++
++    async def exercise():
++        await first.prepare()
++        await second.prepare()
++        prompt = _prompt()
++        assert (await first.invoke(prompt, _Logger())) == "model-a::1"
++        assert (await first.invoke(prompt, _Logger())) == "model-a::1"
++        assert (await second.invoke(prompt, _Logger())) == "model-b::1"
++        assert (await first.invoke(prompt, _Logger(), stop=["END"])) == "model-a:END:2"
++
++    asyncio.run(exercise())
++    assert (first.calls, second.calls) == (2, 1)
++
++
++def test_llm_cache_detects_changed_image_bytes(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    image = tmp_path / "image.png"
++    image.write_bytes(b"old image")
++    model = _LLM("model-a")
++
++    async def exercise():
++        await model.prepare()
++        assert (await model.invoke(_prompt(image), _Logger())) == "model-a::1"
++        image.write_bytes(b"new image")
++        assert (await model.invoke(_prompt(image), _Logger())) == "model-a::2"
++
++    asyncio.run(exercise())
++    assert model.calls == 2
++
++
++def test_embedding_cache_separates_model_and_input_limit(tmp_path, monkeypatch):
++    monkeypatch.setattr(embeddings, "EMBEDDING_CACHE_DIR", tmp_path / "embeddings")
++    first = _Embedding("model-a", 3)
++    second = _Embedding("model-b", 3)
++    longer_input = _Embedding("model-a", 7)
++
++    async def exercise():
++        assert first.calls == 0
++        np.testing.assert_array_equal(await first.embed("abcdefg", _Logger()), [1, 3])
++        np.testing.assert_array_equal(await first.embed("abcdefg", _Logger()), [1, 3])
++        np.testing.assert_array_equal(await second.embed("abcdefg", _Logger()), [1, 3])
++        np.testing.assert_array_equal(
++            await longer_input.embed("abcdefg", _Logger()), [1, 7]
++        )
++
++    asyncio.run(exercise())
++    assert (first.calls, second.calls, longer_input.calls) == (1, 1, 1)
++
++
++def test_legacy_cache_entries_are_not_reused(tmp_path, monkeypatch):
++    llm_dir = tmp_path / "llm"
++    embedding_dir = tmp_path / "embeddings"
++    llm_dir.mkdir()
++    embedding_dir.mkdir()
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", llm_dir)
++    monkeypatch.setattr(embeddings, "EMBEDDING_CACHE_DIR", embedding_dir)
++    prompt = _prompt()
++    old_llm_hash = hashlib.sha256(
++        f"{prompt}-{prompt.temperature}-{prompt.seed}".encode()
++    ).hexdigest()
++    (llm_dir / old_llm_hash).write_text(
++        json.dumps(
++            {
++                "prompt": str(prompt),
++                "temperature": prompt.temperature,
++                "seed": prompt.seed,
++                "response": "stale",
++                "runtime": 1.0,
++                "cost": 0.0,
++            }
++        )
++    )
++    text = "example"
++    (embedding_dir / hashlib.sha256(text.encode()).hexdigest()).write_text(
++        json.dumps({"prompt": text, "response": [999]})
++    )
++    model = _LLM("model-a")
++    embedder = _Embedding("model-a", 3)
++
++    async def exercise():
++        await model.prepare()
++        assert (await model.invoke(prompt, _Logger())) == "model-a::1"
++        np.testing.assert_array_equal(await embedder.embed(text, _Logger()), [1, 3])
++
++    asyncio.run(exercise())
++
++
++def test_image_mutation_during_inference_cannot_poison_new_cache_key(
++    tmp_path, monkeypatch
++):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    image = tmp_path / "image.png"
++    image.write_bytes(b"old")
++
++    class MutatingLLM(_LLM):
++        async def _invoke(self, prompt, stop=[]):
++            self.calls += 1
++            observed = prompt.sha256()
++            if self.calls == 1:
++                image.write_bytes(b"new")
++            return observed, 0.1, 0.0
++
++    model = MutatingLLM("model-a")
++
++    async def exercise():
++        await model.prepare()
++        old_result = await model.invoke(_prompt(image), _Logger())
++        new_result = await model.invoke(_prompt(image), _Logger())
++        assert old_result != new_result
++
++    asyncio.run(exercise())
++    assert model.calls == 2
++
++
++def test_frozen_prompt_sends_original_image_after_path_changes(tmp_path):
++    image = tmp_path / "image.png"
++    Image.new("RGB", (2, 2), "red").save(image)
++    frozen = _prompt(image).snapshot()
++    original_hash = frozen.sha256()
++    Image.new("RGB", (2, 2), "green").save(image)
++
++    payload = frozen.prompt_messages
++    encoded = payload[0]["content"][1]["image_url"]["url"].split(",", 1)[1]
++    with Image.open(io.BytesIO(base64.b64decode(encoded))) as decoded:
++        red, green, _ = decoded.getpixel((0, 0))
++        assert red > green
++    assert frozen.prompt_messages == payload
++    assert frozen.sha256() == original_hash
++    assert _prompt(image).snapshot().sha256() != original_hash
++
++
++def test_identical_image_bytes_at_different_paths_share_cache(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    first_image = tmp_path / "a.png"
++    second_image = tmp_path / "b.png"
++    first_image.write_bytes(b"same image")
++    second_image.write_bytes(first_image.read_bytes())
++    model = _LLM("model-a")
++
++    async def exercise():
++        await model.prepare()
++        for path in (first_image, second_image, first_image):
++            assert (await model.invoke(_prompt(path), _Logger())) == "model-a::1"
++
++    asyncio.run(exercise())
++    assert model.calls == 1
++
++
++def test_corrupt_llm_entry_fails_before_paid_recomputation(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    model = _LLM("model-a")
++    prompt = _prompt()
++
++    async def exercise():
++        await model.prepare()
++        assert (await model.invoke(prompt, _Logger())) == "model-a::1"
++        (llm.LLM_CACHE_DIR / model._cache_key(prompt, [])).write_text("{")
++        with pytest.raises(RuntimeError, match="Corrupt LLM cache entry"):
++            await model.invoke(prompt, _Logger())
++
++    asyncio.run(exercise())
++    assert model.calls == 1
++
++
++def test_failed_cache_write_preserves_previous_value(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    model = _LLM("model-a")
++    prompt = _prompt()
++    model.cache(prompt, "good", 0.1, 0.0)
++
++    def interrupted_dump(_data, stream):
++        stream.write("{")
++        raise OSError("interrupted write")
++
++    with monkeypatch.context() as patch:
++        patch.setattr(llm.json, "dump", interrupted_dump)
++        with pytest.raises(OSError, match="interrupted write"):
++            model.cache(prompt, "bad", 0.1, 0.0)
++    assert model.get_cached(prompt) == ("good", 0.1, 0.0)
++
++
++def test_concurrent_identical_calls_invoke_model_once(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++
++    class SlowLLM(_LLM):
++        async def _invoke(self, prompt, stop=[]):
++            self.calls += 1
++            await asyncio.sleep(0.02)
++            return f"{self.model_id}:{self.calls}", 0.02, 0.0
++
++    model = SlowLLM("model-a")
++
++    async def exercise():
++        await model.prepare()
++        return await asyncio.gather(
++            *(model.invoke(_prompt(), _Logger()) for _ in range(20))
++        )
++
++    assert asyncio.run(exercise()) == ["model-a:1"] * 20
++    assert model.calls == 1
++
++
++def test_caller_mutating_stop_during_call_does_not_poison_cache(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    started = asyncio.Event()
++    resume = asyncio.Event()
++
++    class SlowLLM(_LLM):
++        async def _invoke(self, prompt, stop=[]):
++            self.calls += 1
++            observed = tuple(stop)
++            started.set()
++            await resume.wait()
++            return f"{self.model_id}:{','.join(observed)}:{self.calls}", 0.1, 0.0
++
++    model = SlowLLM("model-a")
++
++    async def exercise():
++        await model.prepare()
++        caller_stop = ["OLD"]
++        first = asyncio.create_task(
++            model.invoke(_prompt(), _Logger(), stop=caller_stop)
++        )
++        await started.wait()
++        caller_stop[:] = ["NEW"]
++        resume.set()
++        assert await first == "model-a:OLD:1"
++        assert await model.invoke(_prompt(), _Logger(), stop=["NEW"]) == "model-a:NEW:2"
++
++    asyncio.run(exercise())
++    assert model.calls == 2
++
++
++def test_cost_configuration_change_invalidates_cached_cost(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++
++    class CostLLM(_LLM):
++        async def _invoke(self, prompt, stop=[]):
++            self.calls += 1
++            return "answer", 0.1, self.characteristics.in_cost
++
++    old, new = CostLLM("model-a"), CostLLM("model-a")
++    old.characteristics.in_cost = 1.0
++    new.characteristics.in_cost = 2.0
++
++    async def exercise():
++        await old.prepare()
++        await new.prepare()
++        assert (await old.invoke_with_runtime_and_cost(_prompt(), _Logger()))[2] == 1.0
++        assert (await new.invoke_with_runtime_and_cost(_prompt(), _Logger()))[2] == 2.0
++
++    asyncio.run(exercise())
++    assert (old.calls, new.calls) == (1, 1)
++
++
++def test_cache_disabled_does_not_write(tmp_path, monkeypatch):
++    cache_dir = tmp_path / "llm"
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", cache_dir)
++    model = _LLM("model-a")
++    model.cache_enabled = False
++
++    async def exercise():
++        await model.prepare()
++        await model.invoke(_prompt(), _Logger())
++        await model.invoke(_prompt(), _Logger())
++
++    asyncio.run(exercise())
++    assert model.calls == 2
++    assert not cache_dir.exists()
++
++
++def test_cache_disabled_does_not_snapshot_image(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    model = _LLM("model-a")
++    model.cache_enabled = False
++    prompt = _prompt(tmp_path / "missing-image.png")
++
++    async def exercise():
++        await model.prepare()
++        assert await model.invoke(prompt, _Logger()) == "model-a::1"
++
++    asyncio.run(exercise())
++
++
++def test_different_prompts_still_run_concurrently(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++
++    class SlowLLM(_LLM):
++        active = 0
++        max_active = 0
++
++        async def _invoke(self, prompt, stop=[]):
++            self.calls += 1
++            self.active += 1
++            self.max_active = max(self.max_active, self.active)
++            await asyncio.sleep(0.02)
++            self.active -= 1
++            return str(prompt), 0.02, 0.0
++
++    model = SlowLLM("model-a")
++
++    async def exercise():
++        await model.prepare()
++        await asyncio.gather(
++            *(
++                model.invoke(
++                    llm.Prompt([llm.Message(f"prompt-{i}", "user")]), _Logger()
++                )
++                for i in range(8)
++            )
++        )
++
++    asyncio.run(exercise())
++    assert model.calls == 8
++    assert model.max_active > 1
++
++
++def test_concurrent_identical_embeddings_invoke_model_once(tmp_path, monkeypatch):
++    monkeypatch.setattr(embeddings, "EMBEDDING_CACHE_DIR", tmp_path / "embeddings")
++
++    class SlowEmbedding(_Embedding):
++        async def _embed(self, text):
++            self.calls += 1
++            await asyncio.sleep(0.02)
++            return np.array([self.calls, len(text)])
++
++    model = SlowEmbedding("model-a", 7)
++
++    async def exercise():
++        return await asyncio.gather(
++            *(model.embed("example", _Logger()) for _ in range(20))
++        )
++
++    for result in asyncio.run(exercise()):
++        np.testing.assert_array_equal(result, [1, 7])
++    assert model.calls == 1
++
++
++def test_atomic_replacement_preserves_cache_file_permissions(tmp_path, monkeypatch):
++    monkeypatch.setattr(llm, "LLM_CACHE_DIR", tmp_path / "llm")
++    model = _LLM("model-a")
++    prompt = _prompt()
++    reference = tmp_path / "reference"
++    reference.write_text("baseline")
++    model.cache(prompt, "first", 0.1, 0.0)
++    path = llm.LLM_CACHE_DIR / model._cache_key(prompt, [])
++    assert stat.S_IMODE(path.stat().st_mode) == stat.S_IMODE(reference.stat().st_mode)
++
++    path.chmod(0o640)
++    model.cache(prompt, "second", 0.1, 0.0)
++    assert stat.S_IMODE(path.stat().st_mode) == 0o640
++
++
++def test_embedding_cache_uses_actual_truncated_request(tmp_path, monkeypatch):
++    monkeypatch.setattr(embeddings, "EMBEDDING_CACHE_DIR", tmp_path / "embeddings")
++
++    class TruncatingEmbedding(_Embedding):
++        def _effective_input(self, text):
++            return text[: self.characteristics.in_len]
++
++    model = TruncatingEmbedding("model-a", 3)
++
++    async def exercise():
++        np.testing.assert_array_equal(await model.embed("abcX", _Logger()), [1, 3])
++        np.testing.assert_array_equal(await model.embed("abcY", _Logger()), [1, 3])
++
++    asyncio.run(exercise())
++    assert model.calls == 1
++
++
++def test_corrupt_embedding_entry_warns_before_recomputation(tmp_path, monkeypatch):
++    monkeypatch.setattr(embeddings, "EMBEDDING_CACHE_DIR", tmp_path / "embeddings")
++    model = _Embedding("model-a", 3)
++    text = "abc"
++
++    async def exercise():
++        await model.embed(text, _Logger())
++        (embeddings.EMBEDDING_CACHE_DIR / model._cache_key(text)).write_text("{")
++        with pytest.warns(RuntimeWarning, match="Corrupt embedding cache entry"):
++            await model.embed(text, _Logger())
++
++    asyncio.run(exercise())
++    assert model.calls == 2
+diff --git a/tests/test_simulate_store_incremental.py b/tests/test_simulate_store_incremental.py
+new file mode 100644
+index 0000000..8d5a160
+--- /dev/null
++++ b/tests/test_simulate_store_incremental.py
+@@ -0,0 +1,256 @@
++"""Process-crash recovery and compatibility for incremental precompute state."""
++
++import json
++import os
++import stat
++import subprocess
++import sys
++import time
++from pathlib import Path
++
++import pytest
++
++from reasondb.backends.simulate_store import SimulateStore
++from reasondb.evaluation.precompute import run_precompute
++
++
++def _record(store, question):
++    store.record_text_qa("model", question, "context", "yes", 0.0, 0.1, 0.0, 0.0, True)
++    store.mark_op_precomputed(question)
++
++
++def test_delta_round_trip_and_legacy_export(tmp_path):
++    path = tmp_path / "recording.json"
++    store = SimulateStore()
++    _record(store, "q1")
++    store.record_vision(
++        "vision", "what?", "image.png", "cat", 0.0, 0.2, 0.0, None, None, True
++    )
++    store.record_operator_config("op", {"prompt": "fixed"})
++    store.record_filter_stats("benchmark", "dev", {"matrix": [1]})
++    first = store.checkpoint_delta(path)
++    assert first.is_file()
++    assert not path.exists()
++    assert store.checkpoint_delta(path) is None
++    resumed = SimulateStore.load_incremental(path)
++    assert resumed.counts() == store.counts()
++    assert resumed.lookup_text_qa("model", "q1", "context")[0] == "yes"
++    assert resumed.lookup_vision("vision", "what?", "image.png")[0] == "cat"
++    assert resumed.get_operator_config_override("op") == {"prompt": "fixed"}
++    assert resumed.get_filter_stats("benchmark", "dev") == {"matrix": [1]}
++
++    _record(resumed, "q2")
++    resumed.checkpoint_delta(path)
++    resumed.finalize_checkpoints(path)
++    assert not SimulateStore._checkpoint_dir(path).exists()
++    assert SimulateStore.load(path)._payload() == resumed._payload()
++    assert json.loads(path.read_text())["text_qa"]
++
++
++def test_failed_delta_write_preserves_committed_state_and_can_retry(
++    tmp_path, monkeypatch
++):
++    path = tmp_path / "recording.json"
++    store = SimulateStore()
++    _record(store, "q1")
++    store.checkpoint_delta(path)
++    _record(store, "q2")
++
++    def broken_dump(_payload, stream, **_kwargs):
++        stream.write("{")
++        raise OSError("injected write failure")
++
++    with monkeypatch.context() as patch:
++        patch.setattr("reasondb.backends.simulate_store.json.dump", broken_dump)
++        with pytest.raises(OSError, match="injected write failure"):
++            store.checkpoint_delta(path)
++    assert SimulateStore.load_incremental(path).counts()["n_text_qa"] == 1
++    assert len(list(SimulateStore._checkpoint_dir(path).glob("checkpoint-*.json"))) == 1
++    store.checkpoint_delta(path)
++    assert SimulateStore.load_incremental(path).counts()["n_text_qa"] == 2
++
++
++def test_failed_final_export_keeps_prior_json_and_deltas(tmp_path, monkeypatch):
++    path = tmp_path / "recording.json"
++    store = SimulateStore()
++    _record(store, "base")
++    store.save(path)
++    _record(store, "new")
++    store.checkpoint_delta(path)
++
++    def broken_dump(_payload, stream, **_kwargs):
++        stream.write("{")
++        raise OSError("injected final export failure")
++
++    with monkeypatch.context() as patch:
++        patch.setattr("reasondb.backends.simulate_store.json.dump", broken_dump)
++        with pytest.raises(OSError, match="injected final export failure"):
++            store.finalize_checkpoints(path)
++    assert SimulateStore.load(path).counts()["n_text_qa"] == 1
++    assert SimulateStore.load_incremental(path).counts()["n_text_qa"] == 2
++
++
++def test_filter_stats_update_uses_latest_committed_delta(tmp_path):
++    path = tmp_path / "recording.json"
++    store = SimulateStore()
++    store.record_filter_stats("benchmark", "dev", {"version": 1})
++    store.save(path)
++    store.record_filter_stats("benchmark", "dev", {"version": 2})
++    store.checkpoint_delta(path)
++    assert SimulateStore.load_incremental(path).get_filter_stats(
++        "benchmark", "dev"
++    ) == {"version": 2}
++
++
++def test_final_export_committed_before_sidecar_cleanup_is_not_replayed(
++    tmp_path, monkeypatch
++):
++    path = tmp_path / "recording.json"
++    store = SimulateStore()
++    store.record_filter_stats("benchmark", "dev", {"version": 1})
++    store.checkpoint_delta(path)
++    store.record_filter_stats("benchmark", "dev", {"version": 2})
++    store.checkpoint_delta(path)
++
++    original_unlink = Path.unlink
++
++    def interrupted_cleanup(target, *args, **kwargs):
++        if target.name.startswith("checkpoint-"):
++            raise OSError("injected cleanup failure")
++        return original_unlink(target, *args, **kwargs)
++
++    with monkeypatch.context() as patch:
++        patch.setattr(Path, "unlink", interrupted_cleanup)
++        with pytest.raises(OSError, match="injected cleanup failure"):
++            store.finalize_checkpoints(path)
++
++    assert SimulateStore.load_incremental(path).get_filter_stats(
++        "benchmark", "dev"
++    ) == {"version": 2}
++    newer = SimulateStore.load(path)
++    newer.record_filter_stats("benchmark", "dev", {"version": 3})
++    newer.save(path)
++    resumed = SimulateStore.load_incremental(path)
++    assert resumed.get_filter_stats("benchmark", "dev") == {"version": 3}
++    resumed.record_filter_stats("benchmark", "dev", {"version": 4})
++    checkpoint = resumed.checkpoint_delta(path)
++    assert checkpoint.name == "checkpoint-00000003.json"
++    assert SimulateStore.load_incremental(path).get_filter_stats(
++        "benchmark", "dev"
++    ) == {"version": 4}
++
++
++def test_atomic_replacement_preserves_existing_file_permissions(tmp_path):
++    path = tmp_path / "recording.json"
++    path.write_text("{}")
++    path.chmod(0o640)
++    store = SimulateStore()
++    store.save(path)
++    assert stat.S_IMODE(path.stat().st_mode) == 0o640
++
++
++def test_delta_and_final_export_emit_telemetry(tmp_path, monkeypatch):
++    path = tmp_path / "recording.json"
++    events = []
++    monkeypatch.setattr(
++        "reasondb.backends.simulate_store._monitor.is_enabled", lambda: True
++    )
++    monkeypatch.setattr(
++        "reasondb.backends.simulate_store._monitor.record_precompute_save",
++        lambda **event: events.append(event),
++    )
++    store = SimulateStore()
++    _record(store, "q1")
++    store.checkpoint_delta(path)
++    store.finalize_checkpoints(path)
++    assert [event["kind"] for event in events] == ["delta", "full"]
++    assert all(event["size_bytes"] > 0 and event["seconds"] >= 0 for event in events)
++
++
++def test_killed_writer_before_delta_publish_keeps_previous_checkpoint(tmp_path):
++    path = tmp_path / "recording.json"
++    marker = tmp_path / "before-replace"
++    store = SimulateStore()
++    _record(store, "committed")
++    store.save(path)
++    child_code = """
++import sys, time
++from pathlib import Path
++import reasondb.backends.simulate_store as module
++path, marker = map(Path, sys.argv[1:])
++store = module.SimulateStore.load(path)
++store.record_text_qa('model', 'new', 'context', 'yes', 0.0, 0.1, 0.0, 0.0, True)
++def blocked_replace(src, dst):
++    marker.write_text('ready')
++    time.sleep(60)
++module.os.replace = blocked_replace
++store.checkpoint_delta(path)
++"""
++    environment = dict(os.environ)
++    environment["PYTHONPATH"] = str(Path(__file__).parents[1])
++    child = subprocess.Popen(
++        [sys.executable, "-c", child_code, str(path), str(marker)],
++        env=environment,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++    )
++    try:
++        deadline = time.monotonic() + 5
++        while not marker.exists() and time.monotonic() < deadline:
++            if child.poll() is not None:
++                raise AssertionError(child.communicate()[1].decode())
++            time.sleep(0.01)
++        assert marker.exists(), "writer did not reach the publication boundary"
++    finally:
++        child.kill()
++        child.communicate(timeout=5)
++    assert SimulateStore.load_incremental(path).counts()["n_text_qa"] == 1
++    recovered = SimulateStore.load_incremental(path)
++    _record(recovered, "new")
++    recovered.checkpoint_delta(path)
++    assert SimulateStore.load_incremental(path).counts()["n_text_qa"] == 2
++
++
++def test_precompute_resumes_after_failed_query_without_replaying_completed_calls(
++    tmp_path,
++):
++    class Query:
++        def __init__(self, name):
++            self.query = name
++
++    class Benchmark:
++        queries = [Query("q1"), Query("q2"), Query("q3")]
++
++    class Executor:
++        def __init__(self, fail_on=None):
++            self.fail_on = fail_on
++            self.calls = []
++
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *_args):
++            pass
++
++        def precompute_query(self, query, _index):
++            store = SimulateStore.get_precompute()
++            if store.is_op_precomputed(query.query):
++                return
++            if query.query == self.fail_on:
++                raise RuntimeError("injected query failure")
++            self.calls.append(query.query)
++            _record(store, query.query)
++
++    path = tmp_path / "recording.json"
++    first = Executor(fail_on="q3")
++    with pytest.raises(RuntimeError, match="injected query failure"):
++        run_precompute(Benchmark(), first, path)
++    assert first.calls == ["q1", "q2"]
++    assert not path.exists()
++    assert SimulateStore.load_incremental(path).counts()["n_text_qa"] == 2
++
++    second = Executor()
++    run_precompute(Benchmark(), second, path)
++    assert second.calls == ["q3"]
++    assert SimulateStore.load(path).counts()["n_text_qa"] == 3
++    assert not SimulateStore._checkpoint_dir(path).exists()
+diff --git a/tests/test_audit_precompute_trace.py b/tests/test_audit_precompute_trace.py
+new file mode 100644
+index 0000000..e3c5ac0
+--- /dev/null
++++ b/tests/test_audit_precompute_trace.py
+@@ -0,0 +1,96 @@
++"""Trace audit must not mistake modelled phase time for observed wall time."""
++
++import json
++
++from reasondb.backends.simulate_store import SimulateStore
++from reasondb.evaluation.precompute import run_precompute
++from reasondb.monitor.collector import Collector
++from research.audit_precompute_trace import audit
++
++
++def test_audit_groups_interleaved_jobs_and_write_kinds(tmp_path):
++    trace = tmp_path / "events.jsonl"
++    events = [
++        {
++            "type": "query_end",
++            "data": {
++                "job_id": "a",
++                "role": "precompute",
++                "cached": False,
++                "component_times": {"end_to_end": 999},
++            },
++        },
++        {
++            "type": "query_end",
++            "data": {"job_id": "b", "role": "sweep", "cached": False},
++        },
++        {
++            "type": "precompute_save",
++            "data": {
++                "job_id": "a",
++                "kind": "delta",
++                "size_bytes": 100,
++                "seconds": 0.01,
++            },
++        },
++        {
++            "type": "query_end",
++            "data": {"job_id": "a", "role": "precompute", "cached": True},
++        },
++        {
++            "type": "precompute_save",
++            "data": {"job_id": "a", "kind": "full", "size_bytes": 200, "seconds": 0.02},
++        },
++        {
++            "type": "query_end",
++            "data": {"job_id": "b", "role": "precompute", "cached": False},
++        },
++        {
++            "type": "precompute_save",
++            "data": {"job_id": "b", "size_bytes": 50, "seconds": 0.03},
++        },
++    ]
++    trace.write_text("".join(json.dumps(event) + "\n" for event in events))
++    rows = audit(trace)
++    assert [row["job_id"] for row in rows] == ["a", "b"]
++    assert rows[0]["queries"] == 2
++    assert rows[0]["queries_with_new_records"] == 1
++    assert rows[0]["cached_queries"] == 1
++    assert rows[0]["written_bytes_by_kind"] == {"delta": 100, "full": 200}
++    assert rows[1]["queries"] == 1
++    assert rows[1]["written_bytes_by_kind"] == {"legacy_full": 50}
++    assert "observed_wall_seconds" not in rows[0]
++
++
++def test_audit_reads_real_precompute_telemetry(tmp_path):
++    class Query:
++        def __init__(self, name):
++            self.query = name
++
++    class Benchmark:
++        queries = [Query("new"), Query("repeat")]
++
++    class Executor:
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *_args):
++            return False
++
++        def precompute_query(self, query, _index):
++            if query.query == "new":
++                SimulateStore.get_precompute().record_text_qa(
++                    "model", "q", "ctx", "yes", 0.0, 0.1, 0.0, 0.0, True
++                )
++
++    trace = tmp_path / "events.jsonl"
++    collector = Collector(jsonl_path=trace).install()
++    try:
++        run_precompute(Benchmark(), Executor(), tmp_path / "recording.json")
++    finally:
++        collector.close()
++    [summary] = audit(trace)
++    assert summary["queries"] == 2
++    assert summary["queries_with_new_records"] == 1
++    assert summary["cached_queries"] == 1
++    assert summary["write_count_by_kind"] == {"delta": 1, "full": 1}
+diff --git a/tests/test_analyze_paper_phase_mix.py b/tests/test_analyze_paper_phase_mix.py
+new file mode 100644
+index 0000000..01370c1
+--- /dev/null
++++ b/tests/test_analyze_paper_phase_mix.py
+@@ -0,0 +1,22 @@
++import json
++
++from research.analyze_paper_phase_mix import summarize
++
++
++def test_nested_profiling_is_not_added_to_tuning():
++    rows = [
++        {
++            "component_times": json.dumps(
++                {"end_to_end": 10, "tuning": 4, "profiling": 3, "execution": 6}
++            )
++        },
++        {
++            "component_times": json.dumps(
++                {"end_to_end": 20, "tuning": 8, "profiling": 6, "execution": 12}
++            )
++        },
++    ]
++    result = summarize(rows)
++    assert result["median_tuning_fraction"] == 0.4
++    assert result["median_execution_fraction"] == 0.6
++    assert result["median_profiling_of_tuning_fraction"] == 0.75
+diff --git a/research/bench_replay_store.py b/research/bench_replay_store.py
+new file mode 100644
+index 0000000..07da26f
+--- /dev/null
++++ b/research/bench_replay_store.py
+@@ -0,0 +1,135 @@
++"""Baseline checkpoint cost using Stretto's bundled real text columns.
++
++No model inference: this profiles SimulateStore recording/checkpointing only.
++Each synthetic query uses a different question over the same real contexts.
++"""
++
++import argparse
++import csv
++import json
++import resource
++import tempfile
++import time
++from pathlib import Path
++
++from reasondb.backends.simulate_store import SimulateStore
++
++
++DATASETS = {
++    "reviews": ("reviews_10000.csv", "reviewtext"),
++    "emails": ("emails_with_cpt.csv", "text"),
++}
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--dataset", choices=DATASETS, required=True)
++    parser.add_argument("--queries", type=int, default=10)
++    parser.add_argument(
++        "--mode", choices=("full", "full_dirty", "incremental"), default="full"
++    )
++    parser.add_argument(
++        "--active-queries",
++        type=int,
++        help="Only this many queries add new records; the rest are no-ops",
++    )
++    args = parser.parse_args()
++    active_queries = (
++        args.queries if args.active_queries is None else args.active_queries
++    )
++    if not 0 <= active_queries <= args.queries:
++        parser.error("--active-queries must be between 0 and --queries")
++    filename, column = DATASETS[args.dataset]
++    source = (
++        Path(__file__).parents[1] / "reasondb/evaluation/benchmarks/files" / filename
++    )
++    with source.open(newline="") as stream:
++        contexts = [row[column] for row in csv.DictReader(stream) if row[column]]
++    store = SimulateStore()
++    with tempfile.TemporaryDirectory(prefix="stretto-replay-baseline-") as directory:
++        path = Path(directory) / "recording.json"
++        total_written = 0
++        total_save_time = 0.0
++        for query_id in range(args.queries):
++            question = f"What is the category? Variant {query_id}"
++            if query_id < active_queries:
++                for context in contexts:
++                    store.record_text_qa(
++                        model_id="offline-replay-probe",
++                        question=question,
++                        context=context,
++                        response="yes",
++                        log_odds=0.0,
++                        runtime=0.1,
++                        effective_compression_ratio=0.0,
++                        materialized_compression_ratio=0.0,
++                        vanilla=True,
++                    )
++            start = time.perf_counter()
++            if args.mode == "full" or (
++                args.mode == "full_dirty" and query_id < active_queries
++            ):
++                store.save(path)
++                size = path.stat().st_size
++            elif args.mode == "full_dirty":
++                size = 0
++            else:
++                checkpoint = store.checkpoint_delta(path)
++                size = checkpoint.stat().st_size if checkpoint is not None else 0
++            seconds = time.perf_counter() - start
++            total_written += size
++            total_save_time += seconds
++            print(
++                json.dumps(
++                    {
++                        "kind": "checkpoint",
++                        "dataset": args.dataset,
++                        "mode": args.mode,
++                        "query": query_id + 1,
++                        "entries": store.counts()["n_text_qa"],
++                        "seconds": seconds,
++                        "file_bytes": size,
++                    }
++                ),
++                flush=True,
++            )
++        finalize_seconds = 0.0
++        if args.mode == "incremental":
++            start = time.perf_counter()
++            store.finalize_checkpoints(path)
++            finalize_seconds = time.perf_counter() - start
++            total_written += path.stat().st_size
++        elif not path.exists():
++            store.save(path)
++            total_written += path.stat().st_size
++        start = time.perf_counter()
++        restored = SimulateStore.load(path)
++        load_seconds = time.perf_counter() - start
++        print(
++            json.dumps(
++                {
++                    "kind": "summary",
++                    "dataset": args.dataset,
++                    "mode": args.mode,
++                    "queries": args.queries,
++                    "active_queries": active_queries,
++                    "contexts_per_query": len(contexts),
++                    "entries": store.counts()["n_text_qa"],
++                    "restored_entries": restored.counts()["n_text_qa"],
++                    "total_save_seconds": total_save_time,
++                    "finalize_seconds": finalize_seconds,
++                    "load_seconds": load_seconds,
++                    "total_file_bytes_written": total_written,
++                    "final_file_bytes": path.stat().st_size,
++                    "write_amplification": total_written / path.stat().st_size,
++                    "peak_rss_bytes": resource.getrusage(
++                        resource.RUSAGE_SELF
++                    ).ru_maxrss,
++                }
++            ),
++            flush=True,
++        )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/research/probe_replay_identity.py b/research/probe_replay_identity.py
+new file mode 100644
+index 0000000..7d96545
+--- /dev/null
++++ b/research/probe_replay_identity.py
+@@ -0,0 +1,44 @@
++"""Demonstrate the current replay key's mutable-image boundary without a model.
++
++This is a diagnostic, not proof that Stretto's static benchmark snapshots are
++incorrect. It asks what happens if the same path is reused for changed bytes.
++"""
++
++import json
++from pathlib import Path
++from tempfile import TemporaryDirectory
++
++from reasondb.backends.simulate_store import SimulateStore
++
++
++def main() -> None:
++    with TemporaryDirectory() as directory:
++        path = Path(directory) / "image.bin"
++        path.write_bytes(b"original-image")
++        store = SimulateStore()
++        store.record_vision(
++            "model",
++            "what is shown?",
++            str(path),
++            "old-answer",
++            0.0,
++            0.1,
++            0.0,
++            None,
++            None,
++            True,
++        )
++        path.write_bytes(b"replacement-image")
++        response = store.lookup_vision("model", "what is shown?", str(path))
++        print(
++            json.dumps(
++                {
++                    "content_changed": True,
++                    "old_response_replayed": response[0] == "old-answer",
++                }
++            )
++        )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/research/probe_partial_query_redo.py b/research/probe_partial_query_redo.py
+new file mode 100644
+index 0000000..6c906c9
+--- /dev/null
++++ b/research/probe_partial_query_redo.py
+@@ -0,0 +1,56 @@
++"""Show the current query-level durability boundary without model inference."""
++
++import json
++from pathlib import Path
++from tempfile import TemporaryDirectory
++
++from reasondb.backends.simulate_store import SimulateStore
++from reasondb.evaluation.precompute import run_precompute
++
++
++class Query:
++    query = "one-long-query"
++
++
++class Benchmark:
++    queries = [Query()]
++
++
++class FailingExecutor:
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *_args):
++        return False
++
++    def precompute_query(self, _query, _index):
++        store = SimulateStore.get_precompute()
++        for item in ("first", "second"):
++            store.record_text_qa(
++                "model", "question", item, "yes", 0.0, 1.0, 0.0, 0.0, True
++            )
++        raise RuntimeError("interrupted before query checkpoint")
++
++
++def main() -> None:
++    with TemporaryDirectory() as directory:
++        path = Path(directory) / "recording.json"
++        try:
++            run_precompute(Benchmark(), FailingExecutor(), path)
++        except RuntimeError as error:
++            if str(error) != "interrupted before query checkpoint":
++                raise
++        restored = SimulateStore.load_incremental(path)
++        print(
++            json.dumps(
++                {
++                    "answers_recorded_before_failure": 2,
++                    "answers_available_after_restart": restored.counts()["n_text_qa"],
++                    "durability_boundary": "completed query, not individual model call",
++                }
++            )
++        )
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/research/audit_precompute_trace.py b/research/audit_precompute_trace.py
+new file mode 100644
+index 0000000..6dc361e
+--- /dev/null
++++ b/research/audit_precompute_trace.py
+@@ -0,0 +1,77 @@
++"""Summarize real monitor JSONL before choosing a persistence mechanism.
++
++Only reports observed event counts and write telemetry. Event timestamps use
++``time.time`` and simulated phase durations may include credited model runtime,
++so neither is treated here as an independently measured query wall time.
++"""
++
++import argparse
++import json
++from collections import defaultdict
++from pathlib import Path
++
++
++def audit(path: Path) -> list[dict]:
++    jobs = defaultdict(
++        lambda: {
++            "queries": 0,
++            "queries_with_new_records": 0,
++            "cached_queries": 0,
++            "write_count_by_kind": defaultdict(int),
++            "written_bytes_by_kind": defaultdict(int),
++            "save_seconds_by_kind": defaultdict(float),
++        }
++    )
++    with path.open() as stream:
++        for line_number, line in enumerate(stream, 1):
++            if not line.strip():
++                continue
++            try:
++                event = json.loads(line)
++            except json.JSONDecodeError as exc:
++                raise ValueError(f"{path}:{line_number}: invalid JSON") from exc
++            kind = event.get("type")
++            data = event.get("data") or {}
++            if kind not in ("query_end", "precompute_save"):
++                continue
++            if kind == "query_end" and data.get("role") != "precompute":
++                continue
++            job = str(data.get("job_id") or "local")
++            result = jobs[job]
++            if kind == "query_end":
++                result["queries"] += 1
++                if data.get("cached"):
++                    result["cached_queries"] += 1
++                else:
++                    result["queries_with_new_records"] += 1
++            else:
++                write_kind = str(data.get("kind") or "legacy_full")
++                result["write_count_by_kind"][write_kind] += 1
++                result["written_bytes_by_kind"][write_kind] += int(
++                    data.get("size_bytes") or 0
++                )
++                result["save_seconds_by_kind"][write_kind] += float(
++                    data.get("seconds") or 0
++                )
++    return [
++        {
++            "job_id": job,
++            **{
++                k: dict(v) if isinstance(v, defaultdict) else v
++                for k, v in value.items()
++            },
++        }
++        for job, value in sorted(jobs.items())
++    ]
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("trace", type=Path, help="Stretto monitor JSONL sidecar")
++    args = parser.parse_args()
++    for result in audit(args.trace):
++        print(json.dumps(result, sort_keys=True))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/research/analyze_paper_phase_mix.py b/research/analyze_paper_phase_mix.py
+new file mode 100644
+index 0000000..b9e2869
+--- /dev/null
++++ b/research/analyze_paper_phase_mix.py
+@@ -0,0 +1,53 @@
++"""Describe phase mix in shipped base01 CSVs without summing nested spans.
++
++These CSVs are paper artifacts. Their component times may include simulated
++model runtime, so this script does not call them observed wall-clock timings.
++"""
++
++import argparse
++import csv
++import json
++import statistics
++from pathlib import Path
++
++
++def summarize(rows: list[dict]) -> dict:
++    components = [json.loads(row["component_times"]) for row in rows]
++
++    def median_fraction(numerator: str, denominator: str) -> float | None:
++        values = [
++            item.get(numerator, 0) / item[denominator]
++            for item in components
++            if item.get(denominator, 0) > 0
++        ]
++        return statistics.median(values) if values else None
++
++    return {
++        "n_rows": len(rows),
++        "median_end_to_end_seconds": statistics.median(
++            item["end_to_end"] for item in components if "end_to_end" in item
++        ),
++        "median_tuning_fraction": median_fraction("tuning", "end_to_end"),
++        "median_execution_fraction": median_fraction("execution", "end_to_end"),
++        "median_profiling_of_tuning_fraction": median_fraction("profiling", "tuning"),
++        "scope": "shipped paper CSV; phase times may include simulated model runtime",
++    }
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--root", type=Path, default=Path("artifacts/base01/merged"))
++    args = parser.parse_args()
++    for path in sorted(args.root.rglob("baselines.csv")):
++        with path.open(newline="") as stream:
++            rows = [
++                row
++                for row in csv.DictReader(stream)
++                if row["approach"] == "optim_global"
++            ]
++        if rows:
++            print(json.dumps({"benchmark": path.parent.parent.name, **summarize(rows)}))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/research/ollama_llm_cache_probe.py b/research/ollama_llm_cache_probe.py
+new file mode 100644
+index 0000000..cf3d97f
+--- /dev/null
++++ b/research/ollama_llm_cache_probe.py
+@@ -0,0 +1,135 @@
++"""Exercise Stretto's reasoning-LLM cache against a local real model.
++
++This is a component probe, not an end-to-end Stretto query or KV-server
++benchmark. Requests are forced to the local Ollama OpenAI-compatible endpoint.
++"""
++
++import argparse
++import asyncio
++import csv
++import json
++import os
++import tempfile
++import time
++import urllib.request
++from pathlib import Path
++
++from reasondb.reasoning import llm
++from reasondb.utils.timing import SimulatedClock
++
++
++DATASETS = {
++    "reviews": ("reviews_10000.csv", "reviewtext"),
++    "emails": ("emails_with_cpt.csv", "text"),
++}
++LOCAL_ENDPOINT = "http://127.0.0.1:11434"
++
++
++class QuietLogger:
++    def debug(self, *_args):
++        pass
++
++
++class CountingModel(llm.OpenAILLM):
++    def __init__(self, model_id):
++        super().__init__(
++            model_id, llm.LLMCharacteristics(100, 100000, 32, 4096, 0, 0), True
++        )
++        self.remote_calls = 0
++
++    async def _invoke(self, prompt, stop=[]):
++        self.remote_calls += 1
++        return await super()._invoke(prompt, stop)
++
++
++def contexts(dataset: str, count: int) -> list[str]:
++    filename, column = DATASETS[dataset]
++    source = (
++        Path(__file__).parents[1] / "reasondb/evaluation/benchmarks/files" / filename
++    )
++    with source.open(newline="") as stream:
++        return [row[column][:500] for row in csv.DictReader(stream) if row[column]][
++            :count
++        ]
++
++
++async def probe(model_name: str, count: int) -> None:
++    original_cache_dir = llm.LLM_CACHE_DIR
++    with tempfile.TemporaryDirectory(prefix="stretto-local-llm-") as directory:
++        llm.LLM_CACHE_DIR = Path(directory)
++        model = CountingModel(model_name)
++        await model.prepare()
++        try:
++            for dataset in DATASETS:
++                prompts = [
++                    llm.Prompt(
++                        [
++                            llm.Message(
++                                f"Answer yes or no only: Does this text express a positive opinion?\n{text}",
++                                "user",
++                            )
++                        ]
++                    )
++                    for text in contexts(dataset, count)
++                ]
++                first, repeat = [], []
++                first_answers, repeat_answers = [], []
++                calls_before_first = model.remote_calls
++                for prompt in prompts:
++                    start = time.perf_counter()
++                    answer, _runtime, _cost = await model.invoke_with_runtime_and_cost(
++                        prompt, QuietLogger()
++                    )
++                    first.append(time.perf_counter() - start)
++                    first_answers.append(answer)
++                calls_after_first = model.remote_calls
++                simulated_before = SimulatedClock.now()
++                for prompt in prompts:
++                    start = time.perf_counter()
++                    answer, _runtime, _cost = await model.invoke_with_runtime_and_cost(
++                        prompt, QuietLogger()
++                    )
++                    repeat.append(time.perf_counter() - start)
++                    repeat_answers.append(answer)
++                print(
++                    json.dumps(
++                        {
++                            "dataset": dataset,
++                            "model": model_name,
++                            "unique_prompts": len(prompts),
++                            "new_remote_calls": calls_after_first - calls_before_first,
++                            "repeat_remote_calls": model.remote_calls
++                            - calls_after_first,
++                            "first_wall_seconds": first,
++                            "repeat_wall_seconds": repeat,
++                            "repeat_answers_equal": first_answers == repeat_answers,
++                            "simulated_clock_credit_on_repeat_seconds": SimulatedClock.now()
++                            - simulated_before,
++                            "scope": "Stretto reasoning-LLM component; not full query execution",
++                        }
++                    ),
++                    flush=True,
++                )
++        finally:
++            await model.close()
++            llm.LLM_CACHE_DIR = original_cache_dir
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--model", default="mistral:latest")
++    parser.add_argument("--items-per-dataset", type=int, default=2)
++    args = parser.parse_args()
++    if args.items_per_dataset < 1:
++        parser.error("--items-per-dataset must be positive")
++    with urllib.request.urlopen(f"{LOCAL_ENDPOINT}/v1/models", timeout=5) as response:
++        model_ids = {model["id"] for model in json.load(response)["data"]}
++    if args.model not in model_ids:
++        parser.error(f"{args.model!r} is not served by local Ollama")
++    os.environ["OPENAI_API_KEY"] = "ollama"
++    os.environ["OPENAI_BASE_URL"] = f"{LOCAL_ENDPOINT}/v1"
++    asyncio.run(probe(args.model, args.items_per_dataset))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/SYSTEMS_AI_PROJECT_FOUNDATION.md b/SYSTEMS_AI_PROJECT_FOUNDATION.md
+new file mode 100644
+index 0000000..2c27dcc
+--- /dev/null
++++ b/SYSTEMS_AI_PROJECT_FOUNDATION.md
+@@ -0,0 +1,199 @@
++# Project foundation: Safe and Recoverable Reuse of AI Operator Work
++
++**Status (2026-10-28): engineering foundation ready; MSc thesis conditional.**
++Isolated branch `research/ai-execution-foundation`, base Stretto commit
++`6a540eab0581fa7e4b2605421839bfc3dde77eae`. The C17 repository is not
++part of this project and was not edited. This branch combines two independently
++developed, still-unsubmitted engineering patches; it is **not** an upstream PR
++or a demonstrated thesis contribution.
++
++Follow-up evidence and the local hardware/data limit are recorded in
++`research/LOCAL_FEASIBILITY_GATE.md`. A local real-model **component** probe
++worked, but no real Stretto precompute trace or KV-server run was available.
++
++## One-sentence objective
++
++Make reused AI-operator answers in an analytical query engine refer to the
++**same effective input and model request**, and make completed expensive work
++recoverable after an interrupted run, while quantifying the cost of those
++guarantees against the simplest correct alternatives.
++
++This is a *systems integration and measurement* project, not a claim to invent
++caching, write-ahead logging, or batching. Its relevance to Systems for AI is
++that incorrect reuse changes query answers, while lost recordings can repeat
++expensive model work. A thesis must establish these effects in realistic
++workloads, not merely demonstrate isolated unit tests.
++
++## Why this project, and what is already solved
++
++Stretto already has within-operator pair deduplication (`reasondb/backends/
++text_qa.py`), completed-response caches (`reasondb/reasoning/llm.py`), whole-
++operator precompute markers (`reasondb/executor.py`), preparation memoization,
++and memory-budgeted KV batches. Its [paper](https://arxiv.org/abs/2602.04430)
++describes KV reuse. [LOTUS](https://lotus-ai.readthedocs.io/en/latest/configurations.html)
++provides persistent semantic-operation caching;
++[SGLang](https://arxiv.org/abs/2312.07104v2),
++[BatchLLM](https://arxiv.org/abs/2412.03594v3), and
++[Sema](https://arxiv.org/abs/2603.11622v1) cover important cache-aware
++scheduling and semantic batching ideas. **Generic cross-query caching or
++batching is not our proposed novelty.**
++
++The concrete local findings are narrower but real:
++
++1. The original LLM/embedding cache identity omitted request components.
++   The separate cache-safety worktree reproduces wrong-model reuse, stale
++   image-byte reuse and wrong input-limit reuse; its isolated patch adds
++   versioned identity, atomic cache writes and instance-local singleflight.
++   See `research/CACHE_SAFETY_REPORT.md` for baseline-red and test evidence.
++2. Original precompute saved the entire growing JSON after every query with
++   `open(..., "w")`. Injected failure truncated a valid recording to one byte.
++   The replay worktree's delta + atomic-final-export patch preserves committed
++   query responses across tested process failures. See
++   `research/REPLAY_CHECKPOINT_FEASIBILITY.md`.
++3. **Unresolved cross-layer boundary:** `SimulateStore.record_vision` and
++   `lookup_vision` key a recording by model ID, question and **path string**.
++   Replacing bytes at that path still returns the old answer; run
++   `PYTHONPATH=. .venv/bin/python research/probe_replay_identity.py` to
++   reproduce. This is a limitation under mutable data, **not proof of a bug
++   under Stretto's static benchmark snapshot contract**. Whether mutable
++   inputs are in scope must be decided explicitly before changing the format.
++
++## Existing code foundation and verification
++
++The branch applies both isolated patches without file conflicts. Cache code:
++`reasondb/reasoning/{llm,embeddings}.py`, `reasondb/utils/cache.py`.
++Recording/recovery code: `reasondb/backends/simulate_store.py`,
++`reasondb/evaluation/precompute.py`, monitor telemetry and related scripts.
++Targeted integration verification: **70 tests passed** across the new
++regression suites and existing replay/merge/invalidation/telemetry tests;
++Ruff checks, JavaScript syntax checks and `git diff --check` passed.
++No paid API call, GPU workload, full-suite pass, Python 3.12 run, or upstream
++maintainer review has occurred. The linked venv is Python 3.13 and lacks
++`torch`/`tqdm`; dependent suites cannot currently collect. The integrated
++branch is a research base, not production-ready.
++
++Recordings benchmark (real text columns, synthetic distinct questions, no
++inference): at ten growing queries, incremental checkpoints plus final export
++were 2.5–2.7× faster and wrote about 64% fewer bytes than full atomic rewrites.
++But a stronger dirty-guard baseline **wins** when only 2/10 queries add data
++(0.038 s versus 0.051 s for deltas). At 5/10 it loses (0.184 s versus
++0.123 s). These are checkpoint-only results, not end-to-end speedups. Raw
++data: `research/interleaved_postfix.jsonl` and
++`research/dirty_guard_matrix.jsonl`.
++
++## Thesis research question and bounded scope
++
++> Under realistic repeated and interrupted AI-query workloads, which request
++> identity and recording lifecycle guarantees are needed for correct reuse,
++> and can they be implemented with bounded CPU/RAM/I/O overhead relative to
++> simple cache invalidation and atomic full snapshots?
++
++Three linked dimensions, **one system problem**:
++
++- **Identity:** effective request includes model/version policy, prompt,
++  modality input content or a valid immutable snapshot token, and relevant
++  execution parameters. Establish what Stretto can know; do not silently
++  promise detection of model aliases changing behind a stable ID.
++- **Recovery:** define a completed-work commit boundary and restart behavior.
++  The current delta prototype covers process crashes between queries; power
++  loss, distributed writers and exactly-once external model calls are not yet
++  supported and must not be claimed.
++- **Cost:** distinguish safety overhead on unique requests from savings on
++  repeated/interrupted work. Use independent `perf_counter` wall-clock
++  measurement: `SimulatedClock` credits historical runtime on replay, so
++  existing phase times are not always observed wall time.
++
++The thesis does **not** need a new cache replacement algorithm. A credible
++contribution would be a verified cross-layer contract, a small reliable
++implementation, and a workload study showing where the contract matters and
++where its cost is unwarranted. The exact mechanism beyond the two existing
++patches is selected only after trace evidence.
++
++## Decisive experiment before more core code
++
++Collect two independent Stretto workloads (e.g. review/text and image or
++email/text) with repeated queries, distinct queries, and controlled
++interruption. Capture raw trace events and verify their provenance. For each
++query, measure: actual monotonic wall time; model-request identity and count;
++cache hit/miss; newly committed response count; persistence bytes/time;
++peak RSS; result correctness; completed model calls redone after restart.
++Use a real model server for performance claims. A deterministic fake model is
++valid for correctness and fault-injection tests only. Do not sum overlapping
++per-thread timers into a critical path.
++
++`research/audit_precompute_trace.py` is a dependency-free first-pass monitor
++JSONL summarizer: it groups interleaved jobs, counts active versus cached
++precompute queries, and separates delta/full write counts, bytes and time.
++Its tests include a trace generated by the actual `run_precompute` + monitor
++path. It deliberately **does not** turn event timestamps or `SimulatedClock`
++phase values into observed wall time. Once real traces are available, run
++`PYTHONPATH=. .venv/bin/python research/audit_precompute_trace.py <trace.jsonl>`.
++
++Compare, under the **same request semantics and data**:
++
++| Baseline | Purpose |
++|---|---|
++| Upstream Stretto | Detect actual faults and raw overhead |
++| Safe identity only | Isolate correctness and keying overhead |
++| Atomic full save + dirty guard | Strong simple recovery/performance competitor |
++| Delta recording only | Isolate I/O and recovery cost |
++| Integrated candidate | Test whether combined guarantees have net value |
++
++Run cold/warm caches, unique/repeated inputs, mutable path content, and process
++kill at before/after publication boundaries. Report p50/p95 per-query wall
++latency, total elapsed, API/model-call count and redo, wrong/stale hits,
++write volume, final/load time, CPU and peak RSS. Keep correctness and
++performance results separate.
++
++## Go/No-Go rules and project deliverables
++
++**Continue to a thesis implementation only if** (a) at least two realistic
++workloads exhibit a material identity/recovery issue under an explicit data
++contract; (b) a baseline comparison shows the integrated mechanism adds
++measurable value over atomic full save + dirty guard and safe cache keys;
++(c) unique-request p95 and peak RSS regressions remain bounded and explained;
++and (d) integration does not require invasive changes to the model server or
++query optimizer. Quantitative working targets, not observed results: zero
++wrong reuse and zero loss of previously committed responses in fault tests;
++<5% unique-request p95 overhead; no unexplained >10% RSS increase; a clear
++reduction in expensive redone model work or end-to-end time on **both**
++workloads. These thresholds can be revised before data collection, not after
++seeing results.
++
++**Stop this thesis route** if static snapshots make identity failures
++irrelevant, crashes/repetition are too rare for meaningful benefit, or the
++dirty guard captures most actual gains. Keep the independently useful fixes
++and start a separate project; do not add cache policies or benchmarks merely
++to save this thesis.
++
++Full MSc deliverables would be: (1) workload and failure characterization;
++(2) a precise AI-result identity/recovery contract; (3) minimal open-source
++implementation and tests; (4) strong-baseline, multi-workload evaluation;
++(5) negative results and deployment boundaries; (6) reproducibility package.
++This branch currently supplies **the code/test foundation and first negative
++boundary**, not deliverables (1), (4), or a complete thesis.
++
++## Immediate next milestone
++
++Obtain real Stretto trace/model access and run the two-workload audit before
++further implementation. If that access is unavailable, finish the correctness
++artifact and explicitly downgrade the project to an engineering portfolio
++piece; model-free timings must not be promoted to a thesis performance claim.
++The checked local environment has Ollama only, not the Stretto GPU/KV servers;
++the shipped paper CSVs cannot substitute for raw precompute traces. A
++controlled partial-query failure also showed that current durability is only
++at completed-query granularity; within-query recovery would require a new
++request/result data flow and is **not** part of the existing patch.
++
++Minimal local verification:
++
++```sh
++.venv/bin/python -m pytest -q tests/test_analyze_paper_phase_mix.py \
++  tests/test_audit_precompute_trace.py \
++  tests/test_ai_cache_identity.py \
++  tests/test_simulate_store_incremental.py tests/test_precompute_query_telemetry.py \
++  tests/test_simulate_store_merge.py tests/test_simulate_store_filter_stats.py \
++  tests/test_simulate_store_compression.py tests/test_merge_precompute.py \
++  tests/test_invalidate_precompute_ops.py
++PYTHONPATH=. .venv/bin/python research/probe_replay_identity.py
++```

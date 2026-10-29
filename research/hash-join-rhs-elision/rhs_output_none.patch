@@ -1,0 +1,268 @@
+diff --git a/src/execution/join_hashtable.cpp b/src/execution/join_hashtable.cpp
+index a3c102c4c2..34525ce88e 100644
+--- a/src/execution/join_hashtable.cpp
++++ b/src/execution/join_hashtable.cpp
+@@ -1805,7 +1805,11 @@ void ScanStructure::NextInnerJoin(DataChunk &keys, DataChunk &probe_data, DataCh
+ 						}
+ 					}
+ 					// on the RHS, we need to fetch the data from the hash table
+-					ht.GatherRHS(pointers, chain_match_sel_vector, result_count, result, ht.lhs_output_in_probe.size());
++					if (ht.join_type == JoinType::INNER && ht.output_columns.empty()) {
++						result.SetCardinalityUnsafe(result_count);
++					} else {
++						ht.GatherRHS(pointers, chain_match_sel_vector, result_count, result, ht.lhs_output_in_probe.size());
++					}
+ 
+ 					AdvancePointers();
+ 					return;
+@@ -1831,8 +1835,12 @@ void ScanStructure::NextInnerJoin(DataChunk &keys, DataChunk &probe_data, DataCh
+ 			}
+ 		}
+ 		// 2) gather RHS vectors
+-		ht.GatherRHS(rhs_pointers, *FlatVector::IncrementalSelectionVector(), base_count, result,
+-		             ht.lhs_output_in_probe.size());
++		if (ht.join_type == JoinType::INNER && ht.output_columns.empty()) {
++			result.SetCardinalityUnsafe(base_count);
++		} else {
++			ht.GatherRHS(rhs_pointers, *FlatVector::IncrementalSelectionVector(), base_count, result,
++			             ht.lhs_output_in_probe.size());
++		}
+ 	}
+ }
+ 
+diff --git a/src/execution/operator/join/physical_hash_join.cpp b/src/execution/operator/join/physical_hash_join.cpp
+index d1e502a2ba..84bdf539aa 100644
+--- a/src/execution/operator/join/physical_hash_join.cpp
++++ b/src/execution/operator/join/physical_hash_join.cpp
+@@ -40,6 +40,7 @@
+ #include "duckdb/storage/buffer_manager.hpp"
+ #include "duckdb/storage/temporary_memory_manager.hpp"
+ #include "duckdb/planner/expression_iterator.hpp"
++#include "duckdb/planner/operator/logical_comparison_join.hpp"
+ 
+ namespace duckdb {
+ 
+@@ -56,6 +57,8 @@ PhysicalHashJoin::PhysicalHashJoin(PhysicalPlan &physical_plan, LogicalOperator
+ 
+ 	children.push_back(left);
+ 	children.push_back(right);
++	rhs_output_none = op.Cast<LogicalComparisonJoin>().right_projection_none;
++	D_ASSERT(!rhs_output_none || join_type == JoinType::INNER);
+ 
+ 	auto &lhs_input_types = children[0].get().GetTypes();
+ 	auto &rhs_input_types = children[1].get().GetTypes();
+@@ -202,7 +205,7 @@ void PhysicalHashJoin::InitializeBuildSide(const vector<LogicalType> &lhs_input_
+ 	}
+ 
+ 	// for other join types
+-	auto right_projection_map_copy = FillProjectionMap(children[1].get(), right_projection_map);
++	auto right_projection_map_copy = rhs_output_none ? vector<idx_t>() : FillProjectionMap(children[1].get(), right_projection_map);
+ 
+ 	// map ALL predicate columns (both in conditions and not)
+ 	MapResidualBuildColumns(lhs_input_types, rhs_input_types, build_cols, build_columns_in_conditions,
+@@ -2755,6 +2758,9 @@ InsertionOrderPreservingMap<string> PhysicalHashJoin::ParamsToString() const {
+ 	}
+ 
+ 	result["Conditions"] = condition_info;
++	if (rhs_output_none) {
++		result["RHS Output"] = "NONE";
++	}
+ 
+ 	SetEstimatedCardinality(result, estimated_cardinality);
+ 	return result;
+diff --git a/src/include/duckdb/execution/operator/join/physical_hash_join.hpp b/src/include/duckdb/execution/operator/join/physical_hash_join.hpp
+index 733ca89e61..e875002f0d 100644
+--- a/src/include/duckdb/execution/operator/join/physical_hash_join.hpp
++++ b/src/include/duckdb/execution/operator/join/physical_hash_join.hpp
+@@ -61,6 +61,8 @@ public:
+ 	JoinProjectionColumns lhs_output_columns;
+ 	//! The indices/types of the rhs columns that need to be output
+ 	JoinProjectionColumns rhs_output_columns;
++	//! True only when the logical INNER join explicitly projects no RHS columns.
++	bool rhs_output_none = false;
+ 
+ 	//! Duplicate eliminated types; only used for delim_joins (i.e. correlated subqueries)
+ 	vector<LogicalType> delim_types;
+diff --git a/src/include/duckdb/planner/operator/logical_join.hpp b/src/include/duckdb/planner/operator/logical_join.hpp
+index 7a67a26d92..03e48082d5 100644
+--- a/src/include/duckdb/planner/operator/logical_join.hpp
++++ b/src/include/duckdb/planner/operator/logical_join.hpp
+@@ -33,7 +33,7 @@ public:
+ 	static void MoveJoinState(LogicalJoin &source, LogicalJoin &target);
+ 
+ 	bool HasProjectionMap() const override {
+-		return !left_projection_map.empty() || !right_projection_map.empty();
++		return !left_projection_map.empty() || !right_projection_map.empty() || right_projection_none;
+ 	}
+ 
+ 	//! The type of the join (INNER, OUTER, etc...)
+@@ -44,6 +44,9 @@ public:
+ 	vector<ProjectionIndex> left_projection_map;
+ 	//! The columns of the RHS that are output by the join
+ 	vector<ProjectionIndex> right_projection_map;
++	//! Join-local distinction: an empty right_projection_map means ALL, this flag means NONE.
++	//! Only enabled for ordinary INNER equality hash joins whose RHS columns are unused.
++	bool right_projection_none = false;
+ 
+ public:
+ 	vector<ColumnBinding> GetColumnBindings() override;
+diff --git a/src/optimizer/column_lifetime_analyzer.cpp b/src/optimizer/column_lifetime_analyzer.cpp
+index 66a13a9a84..58a3afb4ba 100644
+--- a/src/optimizer/column_lifetime_analyzer.cpp
++++ b/src/optimizer/column_lifetime_analyzer.cpp
+@@ -14,6 +14,7 @@
+ #include "duckdb/planner/operator/logical_projection.hpp"
+ #include "duckdb/main/settings.hpp"
+ #include "duckdb/planner/binder.hpp"
++#include <cstdlib>
+ 
+ namespace duckdb {
+ 
+@@ -91,7 +92,21 @@ void ColumnLifetimeAnalyzer::VisitOperator(LogicalOperator &op) {
+ 		column_binding_set_t lhs_unused;
+ 		column_binding_set_t rhs_unused;
+ 		ExtractUnusedColumnBindings(op.children[0]->GetColumnBindings(), lhs_unused);
+-		ExtractUnusedColumnBindings(op.children[1]->GetColumnBindings(), rhs_unused);
++		const auto rhs_bindings = op.children[1]->GetColumnBindings();
++		ExtractUnusedColumnBindings(rhs_bindings, rhs_unused);
++		// Do not overload the empty projection map: elsewhere it means ALL columns.
++		// The opt-in only marks the ordinary single-equality INNER hash-join shape.
++		static const bool rhs_elision_enabled = [] {
++			const auto setting = std::getenv("C17_C22_RHS_ELISION");
++			return setting && setting[0] == '1' && setting[1] == '\0';
++		}();
++		const bool rhs_output_none = rhs_elision_enabled && op.type == LogicalOperatorType::LOGICAL_COMPARISON_JOIN &&
++		                             comp_join.join_type == JoinType::INNER && comp_join.conditions.size() == 1 &&
++		                             op.children[0]->type == LogicalOperatorType::LOGICAL_GET &&
++		                             op.children[1]->type == LogicalOperatorType::LOGICAL_GET &&
++		                             comp_join.conditions[0].IsComparison() &&
++		                             comp_join.conditions[0].GetComparisonType() == ExpressionType::COMPARE_EQUAL &&
++		                             !rhs_bindings.empty() && rhs_unused.size() == rhs_bindings.size();
+ 
+ 		StandardVisitOperator(op);
+ 
+@@ -101,6 +116,7 @@ void ColumnLifetimeAnalyzer::VisitOperator(LogicalOperator &op) {
+ 			GenerateProjectionMap(op.children[0]->GetColumnBindings(), lhs_unused, comp_join.left_projection_map);
+ 		}
+ 		GenerateProjectionMap(op.children[1]->GetColumnBindings(), rhs_unused, comp_join.right_projection_map);
++		comp_join.right_projection_none = rhs_output_none;
+ 		return;
+ 	}
+ 	case LogicalOperatorType::LOGICAL_INSERT:
+diff --git a/src/planner/operator/logical_join.cpp b/src/planner/operator/logical_join.cpp
+index c083f190f7..2030ba5d47 100644
+--- a/src/planner/operator/logical_join.cpp
++++ b/src/planner/operator/logical_join.cpp
+@@ -23,7 +23,8 @@ vector<ColumnBinding> LogicalJoin::GetColumnBindings() {
+ 		return left_bindings;
+ 	}
+ 	// for other join types we project both the LHS and the RHS
+-	auto right_bindings = MapBindings(children[1]->GetColumnBindings(), right_projection_map);
++	auto right_bindings = right_projection_none ? vector<ColumnBinding>()
++	                                         : MapBindings(children[1]->GetColumnBindings(), right_projection_map);
+ 	if (join_type == JoinType::RIGHT_SEMI || join_type == JoinType::RIGHT_ANTI) {
+ 		return right_bindings;
+ 	}
+@@ -60,7 +61,7 @@ void LogicalJoin::ResolveTypes() {
+ 		return;
+ 	}
+ 	// for any other join we project both sides
+-	auto right_types = MapTypes(children[1]->types, right_projection_map);
++	auto right_types = right_projection_none ? vector<LogicalType>() : MapTypes(children[1]->types, right_projection_map);
+ 	if (join_type == JoinType::RIGHT_SEMI || join_type == JoinType::RIGHT_ANTI) {
+ 		types = right_types;
+ 		return;
+@@ -88,6 +89,7 @@ void LogicalJoin::MoveJoinState(LogicalJoin &source, LogicalJoin &target) {
+ 	target.mark_index = source.mark_index;
+ 	target.left_projection_map = std::move(source.left_projection_map);
+ 	target.right_projection_map = std::move(source.right_projection_map);
++	target.right_projection_none = source.right_projection_none;
+ 	if (source.has_estimated_cardinality) {
+ 		target.SetEstimatedCardinality(source.estimated_cardinality);
+ 	}
+diff --git a/src/storage/serialization/serialize_logical_operator.cpp b/src/storage/serialization/serialize_logical_operator.cpp
+index 440ba5ba41..41d72a903e 100644
+--- a/src/storage/serialization/serialize_logical_operator.cpp
++++ b/src/storage/serialization/serialize_logical_operator.cpp
+@@ -360,6 +360,7 @@ void LogicalComparisonJoin::Serialize(Serializer &serializer) const {
+ 	serializer.WritePropertyWithDefault<vector<LogicalType>>(205, "mark_types", mark_types);
+ 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(206, "duplicate_eliminated_columns", duplicate_eliminated_columns);
+ 	serializer.WritePropertyWithDefault<bool>(207, "delim_flipped", delim_flipped, false);
++	serializer.WritePropertyWithDefault<bool>(209, "right_projection_none", right_projection_none, false);
+ 	/* [Deleted] (unique_ptr<Expression>) "predicate" */
+ }
+ 
+@@ -374,6 +375,7 @@ unique_ptr<LogicalOperator> LogicalComparisonJoin::Deserialize(Deserializer &des
+ 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(206, "duplicate_eliminated_columns", result->duplicate_eliminated_columns);
+ 	deserializer.ReadPropertyWithExplicitDefault<bool>(207, "delim_flipped", result->delim_flipped, false);
+ 	deserializer.ReadDeletedProperty<unique_ptr<Expression>>(208, "predicate");
++	deserializer.ReadPropertyWithExplicitDefault<bool>(209, "right_projection_none", result->right_projection_none, false);
+ 	return std::move(result);
+ }
+ 
+diff --git a/test/sql/join/hash_join/hash_join_rhs_output_none.test b/test/sql/join/hash_join/hash_join_rhs_output_none.test
+new file mode 100644
+index 0000000000..ac841c7dc1
+--- /dev/null
++++ b/test/sql/join/hash_join/hash_join_rhs_output_none.test
+@@ -0,0 +1,60 @@
++# name: test/sql/join/hash_join/hash_join_rhs_output_none.test
++# description: INNER hash joins with no RHS output retain every matching row
++# group: [hash_join]
++
++statement ok
++CREATE TABLE c22_a(k INTEGER, id INTEGER)
++
++statement ok
++CREATE TABLE c22_b(k INTEGER, id INTEGER)
++
++statement ok
++INSERT INTO c22_a VALUES (1, 10), (1, 11), (2, 20), (9999999, 90), (NULL, 100)
++
++statement ok
++INSERT INTO c22_b VALUES (1, 100), (1, 101), (1, 102), (2, 200), (3, 300), (NULL, 400)
++
++# Q1: no RHS value is consumed, but duplicate multiplicity must remain.
++query I
++SELECT count(*) FROM c22_a a INNER JOIN c22_b b ON a.k = b.k
++----
++7
++
++# Probe-only detail: six copies of the two key-1 probe IDs plus one key-2 ID.
++query I
++SELECT a.id FROM c22_a a INNER JOIN c22_b b ON a.k = b.k ORDER BY a.id
++----
++10
++10
++10
++11
++11
++11
++20
++
++# Q2: build payload is required; it must keep the ordinary RHS Gather path.
++query II
++SELECT count(*), sum(b.id) FROM c22_a a INNER JOIN c22_b b ON a.k = b.k
++----
++7	806
++
++# Other join types must not use the INNER-only elision.
++query I
++SELECT count(*) FROM c22_a a LEFT JOIN c22_b b ON a.k = b.k
++----
++9
++
++statement ok
++CREATE TABLE c22_many_a AS SELECT 10000000 AS k, i AS id FROM range(3) t(i)
++
++statement ok
++CREATE TABLE c22_many_b AS SELECT 10000000 AS k, i AS id FROM range(1000) t(i)
++
++statement ok
++INSERT INTO c22_many_b VALUES (0, -1)
++
++# One input chunk must resume across multiple output chunks without losing rows.
++query II
++SELECT count(*), sum(a.id) FROM c22_many_a a INNER JOIN c22_many_b b ON a.k = b.k
++----
++3000	3000

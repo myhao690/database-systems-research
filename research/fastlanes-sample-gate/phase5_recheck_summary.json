@@ -1,0 +1,53 @@
+{
+  "write_ms": {
+    "baseline_p50": 716.631541,
+    "gate_p50": 712.164042,
+    "gate_over_baseline_p50": 0.9937659749195996,
+    "baseline_p95": 733.5723328,
+    "gate_p95": 724.1706171999999,
+    "gate_over_baseline_p95": 0.9871836556810774
+  },
+  "storage_bytes": {
+    "baseline_p50": 15555509.0,
+    "gate_p50": 15555509.0,
+    "gate_over_baseline_p50": 1.0,
+    "baseline_p95": 15555509.0,
+    "gate_p95": 15555509.0,
+    "gate_over_baseline_p95": 1.0
+  },
+  "peak_rss_bytes": {
+    "baseline_p50": 304119808.0,
+    "gate_p50": 303792128.0,
+    "gate_over_baseline_p50": 0.9989225298997952,
+    "baseline_p95": 305247027.2,
+    "gate_p95": 303919923.2,
+    "gate_over_baseline_p95": 0.9956523606071667
+  },
+  "peak_footprint_bytes": {
+    "baseline_p50": 301581416.0,
+    "gate_p50": 301237328.0,
+    "gate_over_baseline_p50": 0.9988590543656045,
+    "baseline_p95": 302685664.0,
+    "gate_p95": 301381531.2,
+    "gate_over_baseline_p95": 0.9956914616213868
+  },
+  "materialize_ms": {
+    "baseline_p50": 129.90979149999998,
+    "gate_p50": 129.0810205,
+    "gate_over_baseline_p50": 0.9936204115915312,
+    "baseline_p95": 138.69490365000001,
+    "gate_p95": 138.503525
+  },
+  "paired_write_speedups": [
+    1.003452913731918,
+    1.0212111190979751,
+    0.9983129038436634,
+    1.0230371794920723,
+    0.9919036187689614
+  ],
+  "unique_fls_sha256": {
+    "baseline": 5,
+    "gate": 5
+  },
+  "passes_amended_safety_caps": true
+}
