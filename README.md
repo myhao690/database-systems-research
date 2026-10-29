@@ -1,6 +1,6 @@
 # Database Systems Research Portfolio
 
-Independent, reproducible **database execution, compression and AI-system engineering** experiments. This is a research archive, not one product or an upstream release. The patches target different pinned upstream versions and **must not be stacked together**. A positive result in one diagnostic workload is not a general speedup or a completed thesis.
+Independent, evidence-backed **database execution, compression and AI-system engineering** experiments. This is a selected research archive, not one product, a complete one-command reproduction suite or an upstream release. The patches target different pinned upstream versions and **must not be stacked together**. A positive result in one diagnostic workload is not a general speedup or a completed thesis.
 
 The repository was originally a grouped Top-K DuckDB source snapshot. `main` still contains the **unmodified DuckDB `f2b0bad0` engine**; the two Top-K implementations remain on their independent branches. Other codebases are published as small portable patches under [`research/`](research/), not copied wholesale into `main`.
 
@@ -25,4 +25,4 @@ All times above are from their **own pinned source, machine, SQL/data and timing
 
 ## Provenance and use
 
-Each patch is a diff against the named upstream commit, not a standalone executable. `TOPK.md`, [`docs/`](docs/) and [`evidence/`](evidence/) document the original A/B branches. New projects have only the final/most informative patch and selected raw evidence—no copied upstream trees, private input databases, large binaries or repeated failed variants. Upstream code retains its original licenses: [DuckDB](LICENSE), [FastLanes](research/fastlanes-slpatch/UPSTREAM_LICENSE) and [Stretto](research/stretto-ai-execution/UPSTREAM_LICENSE). Data and benchmark limitations are stated with each result.
+Each patch is a diff against the named upstream commit, not a standalone executable. `TOPK.md`, [`docs/`](docs/) and [`evidence/`](evidence/) document the original A/B branches. New projects have only the final/most informative patch and selected raw evidence—no copied upstream trees, private input databases, large binaries or repeated failed variants. Upstream code retains its original licenses: [DuckDB](LICENSE), [FastLanes](research/fastlanes-slpatch/UPSTREAM_LICENSE) and [Stretto](research/stretto-ai-execution/UPSTREAM_LICENSE). The inherited `CITATION.cff` cites DuckDB, **not this portfolio**. Data and benchmark limitations are stated with each result.
